@@ -3,7 +3,7 @@ import math
 from copy import deepcopy
 
 class TrendAware:
-    def __init__(self, avgLimitH30, avgLimit, showLog, v, posClosingDelay, posClosingBand, showTable, tierCommission):
+    def __init__(self, avgLimitH30, avgLimit=25, showLog=False, v=2, posClosingDelay=False, posClosingBand=False, showTable=False, tierCommission=0.075):
         # Public properties
         self.candleLength30 = 30
         self.candleLength100 = 100
@@ -127,14 +127,14 @@ class TrendAware:
         # Overwrite tierCommission with constructor parameter
         self.tierCommission = tierCommission
 
-    def AddLastTrade(self, lastTrade):
+    async def AddLastTrade(self, lastTrade):
         self.lastTrade = lastTrade
 
-    def AddTrade(self, trade):
+    async def AddTrade(self, trade):
         self.thisTrade = trade
-        self.AddH30AvgLimit()
+        await self.AddH30AvgLimit()
 
-    def AddH30AvgLimit(self):
+    async def AddH30AvgLimit(self):
         if len(self.queQty) >= self.candleLength30:
             self.queQty.pop(0)
             self.queTrades.pop(0)
@@ -181,7 +181,7 @@ class TrendAware:
 
         # isSidelined
         self.thisTrade["isSidelined"] = False
-        sidelineData = self.IsSidelined()
+        sidelineData = await self.IsSidelined()
         if sidelineData and "isSidelined" in sidelineData[0]:
             if sidelineData[0]["isSidelined"] == True or sidelineData[0]["isSidelined"] == 1:
                 self.thisTrade["isSidelined"] = True
@@ -220,7 +220,7 @@ class TrendAware:
             print(self.h30Neg)
             print("<hr color='red'>")
 
-    def IsSidelined(self):
+    async def IsSidelined(self):
         sidelineData = []
         if len(self.quePrice100) < 100:
             return sidelineData
@@ -256,7 +256,7 @@ class TrendAware:
             sidelineData[0]["log"] = ""
         return sidelineData
 
-    def AddPriceDiffs(self, closeDiffIndex):
+    async def AddPriceDiffs(self, closeDiffIndex):
         self.openingPos = 0
         while len(self.pDiffs) > 6:
             self.pDiffs.pop(0)
@@ -286,7 +286,7 @@ class TrendAware:
         del diffPriceLast
         return closeDiffIndex
 
-    def ta1(self, closeDiffIndex):
+    async def ta1(self, closeDiffIndex):
         diffPrice = self.thisTrade["close"] - self.thisTrade["open"]
         diffPriceLast = self.thisTrade["open"] - self.lastTrade["close"]
 
@@ -366,7 +366,7 @@ class TrendAware:
         """
         # End of commented block
 
-    def ta2(self):
+    async def ta2(self):
         h30PosLast = sum(self.h30Pos)
         h30NegLast = sum(self.h30Neg)
         directionH30 = 0
@@ -477,7 +477,7 @@ class TrendAware:
         del uniqueH30Pos
         del uniqueH30Neg
         return signal
-    def ta3(self, closeDiffIndex):
+    async def ta3(self, closeDiffIndex):
         self.openingPos = 0
         self.h30Signal = ''
         diffPrice = self.thisTrade["close"] - self.thisTrade["open"]
@@ -497,7 +497,7 @@ class TrendAware:
         isNeg = False
         consecutiveCandlesToCheck = 2
         #if(len(pos) >= consecutiveCandlesToCheck or len(neg) >= consecutiveCandlesToCheck or closeDiffIndex > 0)
-        #{
+    
         # 5/99	2/-92.5
         if self.posSumThis >= abs(self.negSumThis) and self.posCountThis >= self.negCountThis:
             isPos = True
@@ -534,7 +534,7 @@ class TrendAware:
                 elif abs(self.negSumThis) >= (self.posSumThis / 2):
                     isNeg = True
                     #self.h30Signal += 'bb.-1 '
-        
+    
         lastPriceDiff = self.pDiffs[-1] if self.pDiffs else 0
         if isPos:
             if lastPriceDiff > 0.5 or diffPriceLast > 0.5:
@@ -557,12 +557,12 @@ class TrendAware:
                 #self.h30Signal += ' !c.-1 d=' + str(lastPriceDiff) + ',d1=' + str(diffPriceLast)
                 pass
 
-        self.IsAvgPosMoving()
-        self.IsAvgNegMoving()
-        self.IsAvgPriceMoving()
-        self.IsH30Moving()
-        self.IsH100Moving()
-        self.IsH100AvgMoving()
+        await self.IsAvgPosMoving()
+        await self.IsAvgNegMoving()
+        await self.IsAvgPriceMoving()
+        await self.IsH30Moving()
+        await self.IsH100Moving()
+        await self.IsH100AvgMoving()
         
         self.avgPosNegLog = (f"{self.avgH30Pos}/{self.dirAvgPosThis} \n"
                              f"{self.avgH30Neg}/{self.dirAvgNegThis} \n"
@@ -572,72 +572,72 @@ class TrendAware:
                              f"h100Avg:{self.dirH100AvgThis}/{'1' if self.thisValAvgH100 > 0 else '-1'} {self.thisValAvgH100}")
         self.h30Signal += ' ' + self.avgPosNegLog
 
-    def SetDirAvgPosNegLast(self):
+    async def SetDirAvgPosNegLast(self):
         self.dirAvgNegLast = self.dirAvgNegThis
         self.dirAvgPosLast = self.dirAvgPosThis
         self.dirAvgPriceLast = self.dirAvgPriceThis
 
-    def IsAvgNegMoving(self):
+    async def IsAvgNegMoving(self):
         if self.id > 0:
             print("<br>IsAvgNegMoving")
         avgH30Negs = [item["avgNeg"] for item in self.avgPosNegs][-19:]
-        t = self.GetTrendScore(avgH30Negs)
+        t = await self.GetTrendScore(avgH30Negs)
         if self.idc > 0:
             print("<br>dirAvgNegThis" + str(t))
         if t != 0:
             self.dirAvgNegThis = t
 
-    def IsAvgPosMoving(self):
+    async def IsAvgPosMoving(self):
         if self.id > 0:
             print("<br>IsAvgPosMoving" + str(self.avgLimitH30))
         avgH30Poses = [item["avgPos"] for item in self.avgPosNegs][-19:]
-        t = self.GetTrendScore(avgH30Poses)
+        t = await self.GetTrendScore(avgH30Poses)
         if self.idc > 0:
             print("<br>dirAvgPosThis" + str(t))
         if t != 0:
             self.dirAvgPosThis = t
 
-    def IsAvgPriceMoving(self):
+    async def IsAvgPriceMoving(self):
         if self.id > 0:
             print("<br>IsAvgPriceMoving")
         avgH30Prices = [item["avgPrice"] for item in self.avgPosNegs][-11:]
-        t = self.GetTrendScore(avgH30Prices)
+        t = await self.GetTrendScore(avgH30Prices)
         if self.idc > 0:
             print("<br>dirAvgPriceThis" + str(t))
         if t != 0:
             self.dirAvgPriceThis = t
 
-    def IsH30Moving(self):
+    async def IsH30Moving(self):
         if self.id > 0:
             print("<br>IsH30Moving")
         lastH30s = self.h30s[-19:]
-        t = self.GetTrendScore(lastH30s)
+        t = await self.GetTrendScore(lastH30s)
         if self.idc > 0:
             print("<br>dirH30This" + str(t))
         if t != 0:
             self.dirH30This = t
 
-    def IsH100Moving(self):
+    async def IsH100Moving(self):
         if self.id > 0:
             print("<br>IsH100Moving")
         lastH100s = self.h100s[-19:]
-        t = self.GetTrendScore(lastH100s)
+        t = await self.GetTrendScore(lastH100s)
         if self.idc > 0:
             print("<br>dirH100This" + str(t))
         if t != 0:
             self.dirH100This = t
 
-    def IsH100AvgMoving(self):
+    async def IsH100AvgMoving(self):
         if self.id > 0:
             print("<br>IsH100AvgMoving")
         lastAvgH100 = self.avgH100s[-11:]
-        t = self.GetTrendScore(lastAvgH100)
+        t = await self.GetTrendScore(lastAvgH100)
         if self.idc > 0:
             print("<br>dirH100AvgThis" + str(t))
         if t != 0:
             self.dirH100AvgThis = t
 
-    def GetTrendScore(self, arr, isLog=False):
+    async def GetTrendScore(self, arr, isLog=False):
         if self.id > 0:
             print(arr)
         c = len(arr)
@@ -698,7 +698,7 @@ class TrendAware:
                 return 1
         return 0
 
-    def AddLastSumPosNeg(self):
+    async def AddLastSumPosNeg(self):
         self.posCountLast = self.posCountThis
         self.posSumLast = self.posSumThis
         self.negCountLast = self.negCountThis
@@ -709,9 +709,9 @@ class TrendAware:
         self.avgH30NegLast = self.avgH30Neg
         self.avgH30PriceLast = self.avgH30Price
     
-    def SetTrendColor(self, dirPriceWRTAvg):
+    async def SetTrendColor(self, dirPriceWRTAvg):
         self.dirPriceWRTAvg = dirPriceWRTAvg
-        self.trendColor = self.GetTrendColor(self.dirAvgPosThis, self.dirAvgNegThis, self.dirAvgPriceThis)
+        self.trendColor = await self.GetTrendColor(self.dirAvgPosThis, self.dirAvgNegThis, self.dirAvgPriceThis)
         addNewTrend = False
         countTrendArr = len(self.trendHighLow)
         if countTrendArr > 0:
@@ -795,10 +795,10 @@ class TrendAware:
                 "low200": 0 if 'low200' not in self.thisTrade else self.thisTrade['low200'],
                 "falseColDirCount": 0
             })
-        self.IsFalseColorDir(dirPriceWRTAvg)
+        await self.IsThisFalseColorDir(dirPriceWRTAvg)
         return self.trendHighLow
 
-    def GetTrendColor(self, p, n, c):
+    async def GetTrendColor(self, p, n, c):
         if self.idc > 0:
             print(str(self.avgLimitH30) + 'pnc=' + str(p) + str(n) + str(c))
         color = ''
@@ -833,7 +833,7 @@ class TrendAware:
             color = 'KblacK'
         return color
 
-    def PriceMaxDistanceFromAvgPrice(self, lastPriceDistance):
+    async def PriceMaxDistanceFromAvgPrice(self, lastPriceDistance):
         isNewCycle = False
         avgPrice = self.avgPrices[len(self.avgPrices) - 1]
         # $thisPriceDistance = round($this->thisTrade['close']-$this->thisTrade['avgPrice'], 1);
@@ -841,7 +841,7 @@ class TrendAware:
         if self.v == 1:
             thisPriceDistance = round(self.thisTrade['close'] - avgPrice, 1)
         if self.v == 2:
-            thisPriceDistance = self.GetDirCycle(round(self.thisTrade['close'] - avgPrice, 1), lastPriceDistance)
+            thisPriceDistance = await self.GetDirCycle(round(self.thisTrade['close'] - avgPrice, 1), lastPriceDistance)
         countArr = len(self.avgPriceDistance)
         if countArr == 0:
             lastPriceDistance = thisPriceDistance
@@ -906,7 +906,7 @@ class TrendAware:
             if self.showLog:
                 print(self.thisTrade['serverTime'] + " NEWW " + str(self.openingPos) + " " + str(self.thisTrade['close'] > self.thisTrade['avgPrice']) + "<br>")
                 if len(self.trendHighLow) > 0:
-                    print(self.trendHighLow[len(self.trendHighLow) - 1])
+                    pprint.pprint(self.trendHighLow[len(self.trendHighLow) - 1])
             self.avgPriceDistance.append({
                 "count": 1,
                 "colorStart": self.trendHighLow[len(self.trendHighLow) - 1]['color'] if len(self.trendHighLow) > 0 and 'color' in self.trendHighLow[len(self.trendHighLow) - 1] else '',
@@ -924,7 +924,7 @@ class TrendAware:
             lastPriceDistance = thisPriceDistance
         return lastPriceDistance
 
-    def SetBand(self, dirPriceWRTAvg):
+    async def SetBand(self, dirPriceWRTAvg):
         diffHighLow = (self.thisTrade["high200"] - self.thisTrade["low200"])
         diff10 = round(diffHighLow / 10)
         foundBand = 0
@@ -979,7 +979,7 @@ class TrendAware:
                 "endPrice..": self.thisTrade['close']
             })
 
-    def GetDirCycle(self, thisPriceDistance, lastPriceDistance):
+    async def GetDirCycle(self, thisPriceDistance, lastPriceDistance):
         countToCheck = 6
         if self.thisTrade['isSidelined'] == 1:
             countToCheck = 10
@@ -1013,8 +1013,8 @@ class TrendAware:
                     return -1
         return 0
 
-    def Wonder(self):
-        isPosOpen = self.CheckPositionAndOrders()
+    async def Wonder(self):
+        isPosOpen = await self.CheckPositionAndOrders()
         if not isPosOpen:
             if self.v == 2 and self.dirPriceWRTAvg != 0:
                 self.OpenPosition(self.posSize, self.dirPriceWRTAvg)
@@ -1034,7 +1034,7 @@ class TrendAware:
                     else:
                         pass
 
-    def IsFalseColorDir(self, lastPriceDistance):
+    async def IsThisFalseColorDir(self, lastPriceDistance):
         self.IsFalseColorDir = False  #NOT In USE
         c = len(self.trendHighLow)
         if c <= 0:
@@ -1056,7 +1056,7 @@ class TrendAware:
                 self.IsFalseColorDir = True
                 self.trendHighLow[c - 1]['falseColDirCount'] = self.trendHighLow[c - 1].get('falseColDirCount', 0) + 1
 
-    def setLastBandValues(self, bandIntVal, countLB, lastBand, band):
+    async def setLastBandValues(self, bandIntVal, countLB, lastBand, band):
         if countLB[0] > 0 and lastBand[countLB[0]]["band"] == bandIntVal:
             lastBand[countLB[0]]["count"] += band["count"]
             lastBand[countLB[0]]["endServerTime"] = band["endServerTime.."]
@@ -1072,7 +1072,7 @@ class TrendAware:
             })
             countLB[0] = len(lastBand) - 1
 
-    def CalculateBandDirection(self):
+    async def CalculateBandDirection(self):
         """
         1=Lowest, 10=Highest
 
@@ -1088,15 +1088,15 @@ class TrendAware:
                 continue
 
             if band["subBand10"] > 6:
-                self.setLastBandValues(1, countLB, lastBand, band)
+                await self.setLastBandValues(1, countLB, lastBand, band)
             if band["subBand10"] == 6 or band["subBand10"] == 5:
-                self.setLastBandValues(0, countLB, lastBand, band)
+                await self.setLastBandValues(0, countLB, lastBand, band)
             if band["subBand10"] < 5:
-                self.setLastBandValues(-1, countLB, lastBand, band)
+                await self.setLastBandValues(-1, countLB, lastBand, band)
         print("<pre>")
         print(lastBand)
         
-    def CheckPositionAndOrders(self):
+    async def CheckPositionAndOrders(self):
         isPosOpen = False
         if len(self.trendHighLow) > 0:
             trendHighLowColor = self.trendHighLow[-1]['color']
@@ -1126,7 +1126,7 @@ class TrendAware:
                     if 'commission' in self.posOpen[-1]:
                         comm = self.posOpen[-1]['commission']
                     
-                    self.posOpen[-1]['price'] = self.thisTrade["close"] #getAvgSharePrice(pos, iOrder)
+                    self.posOpen[-1]['price'] = getAvgSharePrice(pos, iOrder)
                     self.posOpen[-1]['size'] = pos['size'] + iOrder['size']
                                         
                     self.posOpen[-1]["closeTime"] = self.thisTrade["serverTime"]

@@ -3,18 +3,19 @@ import json
 import aiohttp
 import datetime
 from collections import defaultdict
+from aiokafka import AIOKafkaProducer
 import websockets
 from base_binance import KafkaBase
+from kafka.errors import KafkaError
 
 class KafkaProducerBinance(KafkaBase):
     def __init__(self):
-        super().__init__()
-        self.trading_pairs = []
-        self.batch_size = self.config["batch_size"]
-        self.producer = self.create_kafka_producer()
+        super().__init__()       
         self.symbol_data = defaultdict(lambda: {
+            'q': 0,
             'qs': 0,
             'qb': 0,
+            't': 0,
             'ts': 0,
             'tb': 0,
             'o': None,
@@ -23,115 +24,137 @@ class KafkaProducerBinance(KafkaBase):
             'l': None,
             'st': None,
             'et': None
-        })
-    async def PriceRounding(price):    
-        if(price >= 1 & price < 300):
+        })    
+    def PriceRounding(self, price):
+        if 1 <= price < 1000:
             return round(price, 2)
-        if(price >= 300):
+        elif price >= 1000:
             return round(price, 1)
         else:
             return price
-        
     
-    async def fetch_trading_pairs(self):
-        """Fetch trading pairs from Binance (Spot, Futures, Perpetual)."""
-        async with aiohttp.ClientSession() as session:
-            # Fetch Spot trading pairs
-            spot_url = "https://api.binance.com/api/v3/exchangeInfo"
-            async with session.get(spot_url) as response:
-                spot_data = await response.json()
-                spot_pairs = [symbol['symbol'] for symbol in spot_data['symbols']]
+    async def calculate_qusd(self, symbol, quantity, price):
+        """Calculate the quantity in USD for a given trade."""
+        try:
+            # Get the trading pair information
+            trading_pair = self.trading_pairs.get(symbol)
+            if not trading_pair:
+                self.logger.warning(f"No trading pair found for symbol: {symbol}")
+                return quantity
+            # Get the quote currency's USD value
+            quote_usd_price = self.quote_currencies.get(trading_pair['quote_asset'].lower(), 0.0)
 
-            # Fetch Futures trading pairs
-            futures_url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-            async with session.get(futures_url) as response:
-                futures_data = await response.json()
-                futures_pairs = [symbol['symbol'] for symbol in futures_data['symbols']]
-
-            # Fetch Perpetual trading pairs
-            perpetual_url = "https://dapi.binance.com/dapi/v1/exchangeInfo"
-            async with session.get(perpetual_url) as response:
-                perpetual_data = await response.json()
-                perpetual_pairs = [symbol['symbol'] for symbol in perpetual_data['symbols']]
-
-            # Combine all pairs
-            self.trading_pairs = sorted(set(spot_pairs + futures_pairs + perpetual_pairs))
-            self.logger.info(f"Fetched {len(self.trading_pairs)} trading pairs from Binance.")
-
-            # Save trading pairs to database
-            await self.save_trading_pairs_to_db()
-
-    async def save_trading_pairs_to_db(self):
-        """Save trading pairs to the database table `tbl_coins`."""
-        query = """
-            INSERT INTO tbl_coins (symbol, created_at)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE symbol=symbol
-        """
-        async with await self.create_db_connection() as conn:
-            async with conn.cursor() as cursor:
-                for symbol in self.trading_pairs:
-                    try:
-                        await cursor.execute(query, (symbol, datetime.datetime.now()))
-                        await conn.commit()
-                    except Exception as e:
-                        self.logger.error(f"Failed to save symbol {symbol} to database: {e}")
-                        await conn.rollback()
-
+            # Calculate quantity in USD
+            qusd = quantity * price * quote_usd_price
+            return qusd
+        except Exception as e:
+            self.logger.error(f"Error calculating quantity in USD for {symbol}: {e}")
+            return quantity
+        
     async def fetch_trades(self, symbols):
         while True:  # Keep trying to reconnect
             try:
-                uri = f"wss://stream.binance.com:9443/ws/{'@trade/'.join(symbols).lower()}@trade"
+                #stream_names = [f"{symbol.lower()}@trade" for symbol in symbols]
+                stream_names = [f"{symbol.lower()}@trade" for symbol in symbols]
+                uri = f"wss://stream.binance.com:9443/stream?streams={'/'.join(stream_names)}"
+                #uri = f"wss://stream.binance.com:9443/ws/{'@trade/'.join(symbols).lower()}@trade"
                 async with websockets.connect(
                     uri,
-                    ping_interval=20,
-                    ping_timeout=10
+                    ping_interval=20,  # Send ping every 20 seconds
+                    ping_timeout=10,   # Wait 10 seconds for a pong response
                 ) as websocket:
                     self.logger.info(f"Connected to WebSocket for symbols: {symbols}")
                     while True:
                         try:
                             message = await websocket.recv()
                             data = json.loads(message)
-                            await self.process_trade(data)
+                            if 'data' in data:  # Binance streams wrap data in a 'data' field
+                                await self.process_trade(data['data'])
+                            else:
+                                self.logger.warning(f"Unexpected message format: {data}")
                         except websockets.exceptions.ConnectionClosed as e:
                             self.logger.error(f"WebSocket connection closed: {e}")
+                            await asyncio.sleep(3)  # Wait before reconnecting
                             break  # Exit the inner loop and reconnect
             except Exception as e:
                 self.logger.error(f"WebSocket connection failed: {e}. Retrying in 10 seconds...")
                 await asyncio.sleep(10)  # Wait before reconnecting
 
     async def process_trade(self, trade):
-        symbol = trade['s']
+        symbol = trade['s'].lower()
         data = self.symbol_data[symbol]
+
         price = float(trade['p'])
-        quantity = float(trade['q'])
+        # Update the price of the trading pair
+        #self.prices[symbol] = price
+
+        # If this is a quote currency pair (e.g., BTCUSDT, ETHUSDT), update the quote currency price in USD
+        if symbol.endswith("usdt"):  # Direct quote currency pair (e.g., btcusdt)
+            # Extract the quote currency (e.g., "btc" from "btcusdt")
+            quote_currency = self.trading_pairs.get(symbol[:-4])
+            if quote_currency:
+                self.quote_currencies[quote_currency] = price  # Update the price in USD
+                # Publish the latest USD price to Kafka cache topic
+                await self.producer.send(self.topicQuoteUSDCache, key=quote_currency.encode('utf-8'), value=price)
+                self.logger.info(f"Published USD price for {quote_currency}: {price}")
+
+        price = self.PriceRounding(float(trade['p']))
+        quantity = self.PriceRounding(float(trade['q']) * price)
+         # Calculate quantity in USD
+        qusd = await self.calculate_qusd(symbol, quantity, price)
+        
         is_buyer_maker = trade['m']
+        #self.logger.info(f" {symbol} p:{price}, q:{quantity}")
 
         if data['o'] is None:
             data['o'] = price
             data['st'] = trade['T']
         data['c'] = price
+        data['q'] += quantity
+        data['qusd'] += qusd
         data['h'] = max(data['h'], price) if data['h'] else price
         data['l'] = min(data['l'], price) if data['l'] else price
         data['et'] = trade['T']
 
         if is_buyer_maker:
-            data['qs'] += quantity
+            data['qs'] += qusd
             data['ts'] += 1
+            data['t'] += 1
         else:
-            data['qb'] += quantity
+            data['qb'] += qusd
             data['tb'] += 1
+            data['t'] += 1
 
     async def publish_to_kafka(self):
+        self.logger.info(f"publish_to_kafka")
         while True:
-            await asyncio.sleep(5)  # Publish every 10 seconds
+            now = datetime.datetime.now() 
+            # Calculate the number of seconds until the next 5th second
+            current_second = now.second
+            secWait5 = (5 - (current_second % 5)) % 5  # Correct calculation
+
+            # If it's already the 5th second, wait for the next minute
+            if secWait5 == 0:
+                secWait5 = 5
+            await asyncio.sleep(secWait5)
+                #await asyncio.sleep(5)  # Publish every 10 seconds
+            #self.logger.info(self.symbol_data)
             for symbol, data in self.symbol_data.items():
+                #self.logger.info(f"Published1 to Kafka topic binance.{symbol}: {data}")
                 if data['st']:
-                    self.producer.send(symbol, value=data)
-                    self.logger.info(f"Published to Kafka topic {symbol}: {data}")
+                    topic = self.topicTradesRaw #f"binance.{symbol}"
+                    key = symbol.encode('utf-8')  # Use trading pair symbol as the key                    
+                    try:
+                        await self.producer.send(topic, key=key, value=data)
+                        self.logger.info(f"Publish {symbol}: {data}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to publish data for {symbol}: {e}")
                     self.symbol_data[symbol] = {  # Reset data for the next window
+                        'q': 0,
+                        'qusd': 0,
                         'qs': 0,
                         'qb': 0,
+                        't': 0,
                         'ts': 0,
                         'tb': 0,
                         'o': None,
@@ -143,22 +166,31 @@ class KafkaProducerBinance(KafkaBase):
                     }
 
     async def run(self):
+        """Main method to run the producer."""
         # Fetch trading pairs initially
-        await self.fetch_trading_pairs()
+        #await self.fetch_trading_pairs()
+
+        # Create Kafka producer
+        self.producer = await self.create_kafka_producer()
 
         # Schedule trading pairs update every hour
-        asyncio.create_task(self.schedule_trading_pairs_update())
+        #asyncio.create_task(self.schedule_trading_pairs_update())
 
         # Start fetching trades
         tasks = []
-        for i in range(0, len(self.trading_pairs), self.batch_size):
-            batch = self.trading_pairs[i:i + self.batch_size]
-            tasks.append(self.fetch_trades(batch))
-        tasks.append(self.publish_to_kafka())
-        await asyncio.gather(*tasks)
 
-    async def schedule_trading_pairs_update(self):
-        """Update trading pairs every hour."""
-        while True:
-            await asyncio.sleep(3600)  # Wait for 1 hour
-            await self.fetch_trading_pairs()
+        # Create separate WebSocket connections for high-load pairs
+        for pair in self.highload_pairs:
+            tasks.append(self.fetch_trades([pair]))
+
+        # Create WebSocket connections for batches of trading pairs
+        """batch_size = 50  # Adjust batch size as needed
+        for i in range(0, len(self.trading_pairs), batch_size):
+            batch = self.trading_pairs[i:i + batch_size]
+            tasks.append(self.fetch_trades(batch))
+        """
+        # Start publishing to Kafka
+        tasks.append(self.publish_to_kafka())
+
+        # Run all tasks concurrently
+        await asyncio.gather(*tasks)
