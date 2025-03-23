@@ -1,0 +1,6 @@
+aiokafka
+aiohttp
+websockets
+aiomysql
+python-dotenv
+watchdog

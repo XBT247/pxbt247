@@ -2,7 +2,7 @@ from collections import OrderedDict
 import json
 import logging
 import asyncio
-from kafka.errors import KafkaError
+from aiokafka.errors import KafkaError
 from kafka import KafkaAdminClient
 from base_binance import KafkaBase
 from trend_aware import TrendAware
@@ -98,6 +98,11 @@ class KafkaConsumerBinance(KafkaBase):
         self.logger.info(f"Consumer for {symbol} processed successfully.")
 
     async def run(self):
+        
+        # Wait for Kafka to be ready
+        if not await self.wait_for_kafka():
+            self.logger.error("Exiting due to Kafka initialization failure.")
+            return
         self.consumer = await self.create_kafka_consumer(self.topicTradesRaw, self.group_id)
         self.consumerCache = self.create_kafka_consumer(self.cacheTrendaware, "cache-reader")  # ✅ Create it once
         self.producer = await self.create_kafka_producer()

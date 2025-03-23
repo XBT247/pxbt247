@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    env_file:
+      - .env
+    environment:
+      KAFKA_ENABLE_KRAFT: "true"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      CLUSTER_ID: "CmCBBf8dR-mZw1wmpoTTHA"
+      KAFKA_LOG4J_LOGGERS: "org.apache.kafka.image.loader.MetadataLoader=warn"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+      - kafka-metadata:/var/lib/kafka/metadata
+    networks:
+      - kafka-net
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: dbcandles      
+      MYSQL_PASSWORD: rootpassword
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - kafka-net
+
+  tradingpairs:
+    build: 
+      context: .
+      dockerfile: Dockerfile.binance.fetchpairs
+    container_name: tradingpairs
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: rootpassword
+      MYSQL_DATABASE: dbcandles
+    depends_on:
+      - kafka
+      - mysql
+    networks:
+      - kafka-net
+  producer:
+    build: 
+      context: .
+      dockerfile: Dockerfile.binance.consumer
+    container_name: producer
+    command: python main_producer.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: rootpassword
+      MYSQL_DATABASE: dbcandles
+    depends_on:
+      - kafka
+      - mysql
+      - tradingpairs
+    networks:
+      - kafka-net
+
+  consumer:
+    build: 
+      context: .
+      dockerfile: Dockerfile.binance.producer
+    container_name: consumer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: rootpassword
+      MYSQL_DATABASE: dbcandles
+    depends_on:
+      - kafka
+      - mysql
+      - producer
+    networks:
+      - kafka-net
+
+volumes:
+  mysql-data:
+  kafka-data:
+  kafka-metadata:
+
+networks:
+  kafka-net:
+    driver: bridge

@@ -6,7 +6,8 @@ from collections import defaultdict
 from aiokafka import AIOKafkaProducer
 import websockets
 from base_binance import KafkaBase
-from kafka.errors import KafkaError
+from aiokafka.errors import KafkaError
+from tradingpairs_binance import TradingPairsFetcher
 
 class KafkaProducerBinance(KafkaBase):
     def __init__(self):
@@ -100,6 +101,7 @@ class KafkaProducerBinance(KafkaBase):
 
         price = self.PriceRounding(float(trade['p']))
         quantity = self.PriceRounding(float(trade['q']) * price)
+        qusd = quantity
          # Calculate quantity in USD
         qusd = await self.calculate_qusd(symbol, quantity, price)
         
@@ -125,6 +127,14 @@ class KafkaProducerBinance(KafkaBase):
             data['tb'] += 1
             data['t'] += 1
 
+    async def cleanup(self):
+        """Clean up resources."""
+        if hasattr(self, 'producer') and self.producer:
+            try:
+                await self.producer.stop()
+            except Exception as e:
+                self.logger.warning(f"Error while stopping Kafka producer: {e}")
+                
     async def publish_to_kafka(self):
         self.logger.info(f"publish_to_kafka")
         while True:
@@ -167,30 +177,50 @@ class KafkaProducerBinance(KafkaBase):
 
     async def run(self):
         """Main method to run the producer."""
-        # Fetch trading pairs initially
-        #await self.fetch_trading_pairs()
 
+        self.logger.info("inside producer run")
+        # Wait for Kafka to be ready
+        if not await self.wait_for_kafka():
+            self.logger.error("Exiting due to Kafka initialization failure.")
+            return
+        
+        # Fetch trading pairs initially
+        self.logger.error(f"trading_pairs1 = { len(self.trading_pairs) }")
+        try:
+            if(len(self.trading_pairs) == 0):
+                await self.fetch_trading_pairs()
+        except asyncio.CancelledError:
+            self.logger.info("fetch_trading_pairs was cancelled.")
+        except Exception as e:
+            self.logger.error(f"fetch_trading_pairs Failed to fetch trading pairs: {e}")
+            return
+        self.logger.error(f"trading_pairs2 = { len(self.trading_pairs) }")
+        
         # Create Kafka producer
         self.producer = await self.create_kafka_producer()
-
-        # Schedule trading pairs update every hour
-        #asyncio.create_task(self.schedule_trading_pairs_update())
-
+        
         # Start fetching trades
         tasks = []
+        try:
+            # Create separate WebSocket connections for high-load pairs
+            for pair in self.highload_pairs:
+                tasks.append(self.fetch_trades([pair]))
 
-        # Create separate WebSocket connections for high-load pairs
-        for pair in self.highload_pairs:
-            tasks.append(self.fetch_trades([pair]))
+            # Create WebSocket connections for batches of trading pairs
+            batch_size = 50  # Adjust batch size as needed
+            for i in range(0, len(self.trading_pairs), batch_size):
+                batch = self.trading_pairs[i:i + batch_size]
+                tasks.append(self.fetch_trades(batch))
+            
+            # Start publishing to Kafka
+            tasks.append(self.publish_to_kafka())
 
-        # Create WebSocket connections for batches of trading pairs
-        """batch_size = 50  # Adjust batch size as needed
-        for i in range(0, len(self.trading_pairs), batch_size):
-            batch = self.trading_pairs[i:i + batch_size]
-            tasks.append(self.fetch_trades(batch))
-        """
-        # Start publishing to Kafka
-        tasks.append(self.publish_to_kafka())
-
-        # Run all tasks concurrently
-        await asyncio.gather(*tasks)
+            # Run all tasks concurrently
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            self.logger.info("Producer was cancelled.")
+        except Exception as e:
+            self.logger.error(f"Unexpected error in producer: {e}")
+        finally:
+            await self.cleanup()
+            

@@ -84,7 +84,7 @@ class TradingPairsFetcher(KafkaBase):
                             #await self.save_trading_pair_to_db(trading_pair)
 
                     self.logger.info(f"Distinct quote currencies: {self.quote_currencies}")
-                """
+                
                 # Fetch Futures trading pairs
                 self.logger.info("Fetching Futures trading pairs...")
                 async with session.get(self.config_binance_urls["exchange_info_future"]) as response:
@@ -100,9 +100,13 @@ class TradingPairsFetcher(KafkaBase):
                     perpetual_data = await response.json()
                     perpetual_pairs = [symbol['symbol'] for symbol in perpetual_data['symbols']]
                     self.logger.info(f"Fetched {len(perpetual_pairs)} Perpetual trading pairs.")
-                """
+                
                 # Exclude high-load pairs from the trading pairs list
-                self.trading_pairs = list(set([symbol_info['symbol'].lower() for symbol_info in spot_data['symbols'] if symbol_info['status'] == 'TRADING']) - set(self.highload_pairs))
+                pairs = list(set([symbol_info['symbol'].lower() for symbol_info in spot_data['symbols'] if symbol_info['status'] == 'TRADING'])
+                             #+ set([symbol_info['symbol'].lower() for symbol_info in spot_data['symbols'] if symbol_info['status'] == 'TRADING']) 
+                             #+ set([symbol_info['symbol'].lower() for symbol_info in spot_data['symbols'] if symbol_info['status'] == 'TRADING']) 
+                             )
+                self.trading_pairs = list(set(pairs) - set(self.highload_pairs))
                 self.logger.info(f"Total trading pairs fetched (excluding high-load pairs): {len(self.trading_pairs)}")
         except asyncio.TimeoutError:
             self.logger.error("Timeout while fetching trading pairs.")
@@ -207,6 +211,12 @@ class TradingPairsFetcher(KafkaBase):
 
     async def run(self):
         """Main method to run the trading pairs fetcher."""
+        
+        # Wait for Kafka to be ready
+        if not await self.wait_for_kafka():
+            self.logger.error("Exiting due to Kafka initialization failure.")
+            return
+        
         # Create Kafka producer
         self.producer = await self.create_kafka_producer()
 
@@ -214,7 +224,3 @@ class TradingPairsFetcher(KafkaBase):
         while True:
             await self.fetch_trading_pairs()
             await asyncio.sleep(3600)  # Wait for 1 hour
-
-if __name__ == "__main__":
-    fetcher = TradingPairsFetcher()
-    asyncio.run(fetcher.run())
