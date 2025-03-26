@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -18,10 +16,12 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       CLUSTER_ID: "CmCBBf8dR-mZw1wmpoTTHA"
+      KAFKA_LOG_CLEANER_ENABLE: "true"
       KAFKA_LOG4J_LOGGERS: "org.apache.kafka.image.loader.MetadataLoader=warn"
     volumes:
       - kafka-data:/var/lib/kafka/data
       - kafka-metadata:/var/lib/kafka/metadata
+      - ./server.properties:/etc/kafka/server.properties  # Mount custom server.properties
     networks:
       - kafka-net
 
@@ -31,13 +31,22 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: rootpwd
       MYSQL_DATABASE: dbcandles      
-      MYSQL_PASSWORD: rootpassword
+      MYSQL_PASSWORD: rootpwd
     volumes:
       - mysql-data:/var/lib/mysql
     networks:
       - kafka-net
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    restart: always
+    environment:
+      PMA_HOST: mysql
+    ports:
+      - "8080:80"
 
   tradingpairs:
     build: 

@@ -7,13 +7,16 @@ from aiokafka import AIOKafkaProducer
 import websockets
 from base_binance import KafkaBase
 from aiokafka.errors import KafkaError
-from tradingpairs_binance import TradingPairsFetcher
+from dbhandler import DBHandler
 
 class KafkaProducerBinance(KafkaBase):
     def __init__(self):
         super().__init__()       
+        self.quote_assets = set()
+        self.dbhandler = DBHandler(self.config_db)  # Initialize DB handler
         self.symbol_data = defaultdict(lambda: {
             'q': 0,
+            'qusd': 0,
             'qs': 0,
             'qb': 0,
             't': 0,
@@ -46,7 +49,8 @@ class KafkaProducerBinance(KafkaBase):
             quote_usd_price = self.quote_currencies.get(trading_pair['quote_asset'].lower(), 0.0)
 
             # Calculate quantity in USD
-            qusd = quantity * price * quote_usd_price
+            qusd = self.PriceRounding(quantity * quote_usd_price)
+            self.logger.info(f"{trading_pair['base_asset'].lower()}/{trading_pair['quote_asset'].lower()} q:{quantity} p:{price} usd:{quote_usd_price} qusd:{qusd}")    
             return qusd
         except Exception as e:
             self.logger.error(f"Error calculating quantity in USD for {symbol}: {e}")
@@ -84,30 +88,38 @@ class KafkaProducerBinance(KafkaBase):
     async def process_trade(self, trade):
         symbol = trade['s'].lower()
         data = self.symbol_data[symbol]
-
-        price = float(trade['p'])
-        # Update the price of the trading pair
-        #self.prices[symbol] = price
-
-        # If this is a quote currency pair (e.g., BTCUSDT, ETHUSDT), update the quote currency price in USD
-        if symbol.endswith("usdt"):  # Direct quote currency pair (e.g., btcusdt)
-            # Extract the quote currency (e.g., "btc" from "btcusdt")
-            quote_currency = self.trading_pairs.get(symbol[:-4])
-            if quote_currency:
-                self.quote_currencies[quote_currency] = price  # Update the price in USD
-                # Publish the latest USD price to Kafka cache topic
-                await self.producer.send(self.topicQuoteUSDCache, key=quote_currency.encode('utf-8'), value=price)
-                self.logger.info(f"Published USD price for {quote_currency}: {price}")
-
+        price = float(trade['p']) 
         price = self.PriceRounding(float(trade['p']))
         quantity = self.PriceRounding(float(trade['q']) * price)
-        qusd = quantity
-         # Calculate quantity in USD
-        qusd = await self.calculate_qusd(symbol, quantity, price)
-        
-        is_buyer_maker = trade['m']
-        #self.logger.info(f" {symbol} p:{price}, q:{quantity}")
+        qusd = 0
+        # If this is a quote currency pair (e.g., BTCUSDT, ETHUSDT), update the quote currency price in USD
+        quote_currency = None
+        if symbol.endswith("usdt") and self.trading_pairs.get(symbol, None):  # Direct quote currency pair (e.g., btcusdt)
+            # Extract the quote currency (e.g., "btc" from "btcusdt")
+            quote_currency = self.trading_pairs.get(symbol, None)['base_asset']
+            #self.logger.info(f"qc: {quote_currency}, isAvailable: {quote_currency in self.quote_assets}")
+            if (quote_currency 
+                and quote_currency.lower() in self.quote_assets 
+                and quote_currency.lower()!= 'usdc'
+                and quote_currency.lower()!= 'fdusd'
+                ):
+                quote_currency = quote_currency.lower()
+                #self.logger.info(f"quote_currency {quote_currency} p: {price} sofar: {len(self.quote_currencies)}")
+                if self.quote_currencies.get(quote_currency, None) == None:
+                    self.logger.info(self.quote_currencies)
 
+                self.quote_currencies[quote_currency] = price  # Update the btc price in USDT
+                # Publish the latest USD price to Kafka cache topic
+                #await self.producer.send(self.topicQuoteUSDCache, key=quote_currency.encode('utf-8'), value=price)
+                #self.logger.info(f"Published USD price for {quote_currency}: {price}")
+                # Calculate quantity in USD
+        if (not symbol.endswith("usdt") 
+        and not symbol.endswith("usdc") 
+        and not symbol.endswith("fdusd") 
+        and not symbol.endswith("try")):
+            qusd = await self.calculate_qusd(symbol, quantity, price)            
+        is_buyer_maker = trade['m']
+        #self.logger.info(f" {symbol} p:{price}, q:{quantity}, qusd:{qusd}")
         if data['o'] is None:
             data['o'] = price
             data['st'] = trade['T']
@@ -126,7 +138,7 @@ class KafkaProducerBinance(KafkaBase):
             data['qb'] += qusd
             data['tb'] += 1
             data['t'] += 1
-
+			
     async def cleanup(self):
         """Clean up resources."""
         if hasattr(self, 'producer') and self.producer:
@@ -146,6 +158,7 @@ class KafkaProducerBinance(KafkaBase):
             # If it's already the 5th second, wait for the next minute
             if secWait5 == 0:
                 secWait5 = 5
+            self.logger.info(f"Waiting {secWait5}")
             await asyncio.sleep(secWait5)
                 #await asyncio.sleep(5)  # Publish every 10 seconds
             #self.logger.info(self.symbol_data)
@@ -177,50 +190,44 @@ class KafkaProducerBinance(KafkaBase):
 
     async def run(self):
         """Main method to run the producer."""
-
-        self.logger.info("inside producer run")
+        # Fetch trading pairs initially
+        self.logger.info(f"Producer starting RUN ")
+                   
         # Wait for Kafka to be ready
         if not await self.wait_for_kafka():
             self.logger.error("Exiting due to Kafka initialization failure.")
-            return
+            raise
         
-        # Fetch trading pairs initially
-        self.logger.error(f"trading_pairs1 = { len(self.trading_pairs) }")
         try:
-            if(len(self.trading_pairs) == 0):
-                await self.fetch_trading_pairs()
-        except asyncio.CancelledError:
-            self.logger.info("fetch_trading_pairs was cancelled.")
+            await self.dbhandler.create_pool()  # Create database connection pool
+            self.trading_pairs = await self.dbhandler.fetch_trading_pairs()
+            self.quote_assets = list({pair['quote_asset'] for pair in self.trading_pairs.values()})
+            self.logger.info(f"Trading pairs loaded: {len(self.trading_pairs)}, quote_assets: {len(self.quote_assets)}")
         except Exception as e:
-            self.logger.error(f"fetch_trading_pairs Failed to fetch trading pairs: {e}")
-            return
-        self.logger.error(f"trading_pairs2 = { len(self.trading_pairs) }")
+            self.logger.error(f"Failed to fetch trading pairs")
+            raise
+        # ✅ Filter out highload pairs before batching
+        filtered_trading_pairs = [
+            symbol for symbol in self.trading_pairs if symbol not in self.highload_pairs
+        ]
+        self.logger.info(f"filtered from highload_pairs: {len(filtered_trading_pairs)}")
         
         # Create Kafka producer
         self.producer = await self.create_kafka_producer()
-        
         # Start fetching trades
         tasks = []
-        try:
-            # Create separate WebSocket connections for high-load pairs
-            for pair in self.highload_pairs:
-                tasks.append(self.fetch_trades([pair]))
+        # Create separate WebSocket connections for high-load pairs
+        for pair in self.highload_pairs:
+            tasks.append(self.fetch_trades([pair]))
+        
+        # Create WebSocket connections for batches of trading pairs
+        batch_size = 50  # Adjust batch size as needed
+        for i in range(0, len(filtered_trading_pairs), batch_size):
+            batch = filtered_trading_pairs[i:i + batch_size]
+            tasks.append(self.fetch_trades(batch))
+        
+        # Start publishing to Kafka
+        tasks.append(self.publish_to_kafka())
 
-            # Create WebSocket connections for batches of trading pairs
-            batch_size = 50  # Adjust batch size as needed
-            for i in range(0, len(self.trading_pairs), batch_size):
-                batch = self.trading_pairs[i:i + batch_size]
-                tasks.append(self.fetch_trades(batch))
-            
-            # Start publishing to Kafka
-            tasks.append(self.publish_to_kafka())
-
-            # Run all tasks concurrently
-            await asyncio.gather(*tasks)
-        except asyncio.CancelledError:
-            self.logger.info("Producer was cancelled.")
-        except Exception as e:
-            self.logger.error(f"Unexpected error in producer: {e}")
-        finally:
-            await self.cleanup()
-            
+        # Run all tasks concurrently
+        await asyncio.gather(*tasks)

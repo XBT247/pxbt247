@@ -6,10 +6,13 @@ import hmac
 import hashlib
 import urllib.parse
 from base_binance import KafkaBase
+from dbhandler import DBHandler
 
 class TradingPairsFetcher(KafkaBase):
     def __init__(self):
         super().__init__()
+        self.producerTP = None  # Kafka producer instance
+        self.dbhandler = DBHandler(self.config_db)  # Initialize DB handler
 
     async def fetch_trading_pairs(self):
         """Fetch trading pairs from Binance and store crucial fields in the database."""
@@ -78,13 +81,13 @@ class TradingPairsFetcher(KafkaBase):
                             self.quote_currencies[symbol_info['quoteAsset'].lower()] = 0.0  # Initialize price to 0.0
 
                             # Publish trading pair to Kafka cache topic
-                            await self.publish_to_kafka_cache(trading_pair)
+                            #await self.publish_to_kafka_cache(trading_pair)
 
                             # Save trading pair information to the database
-                            #await self.save_trading_pair_to_db(trading_pair)
+                            await self.dbhandler.save_trading_pair(trading_pair)
 
                     self.logger.info(f"Distinct quote currencies: {self.quote_currencies}")
-                
+                """
                 # Fetch Futures trading pairs
                 self.logger.info("Fetching Futures trading pairs...")
                 async with session.get(self.config_binance_urls["exchange_info_future"]) as response:
@@ -106,7 +109,8 @@ class TradingPairsFetcher(KafkaBase):
                              #+ set([symbol_info['symbol'].lower() for symbol_info in spot_data['symbols'] if symbol_info['status'] == 'TRADING']) 
                              #+ set([symbol_info['symbol'].lower() for symbol_info in spot_data['symbols'] if symbol_info['status'] == 'TRADING']) 
                              )
-                self.trading_pairs = list(set(pairs) - set(self.highload_pairs))
+                #self.trading_pairs = list(set(pairs) - set(self.highload_pairs))
+                """
                 self.logger.info(f"Total trading pairs fetched (excluding high-load pairs): {len(self.trading_pairs)}")
         except asyncio.TimeoutError:
             self.logger.error("Timeout while fetching trading pairs.")
@@ -204,23 +208,34 @@ class TradingPairsFetcher(KafkaBase):
         try:
              # Maintain local cache
             self.trading_pairs[trading_pair['symbol']] = trading_pair
-            await self.producer.send(self.topicTradingPairsCache, key=trading_pair['symbol'].encode('utf-8'), value=trading_pair)
+            await self.producerTP.send(self.topicTradingPairsCache, key=trading_pair['symbol'].encode('utf-8'), value=trading_pair)
             self.logger.info(f"Published trading pair {trading_pair['symbol']} to Kafka cache topic.")
         except Exception as e:
             self.logger.error(f"Failed to publish trading pair {trading_pair['symbol']} to Kafka cache topic: {e}")
+    
+    async def cleanup(self):
+        """Clean up resources."""
+        if hasattr(self, 'producer') and self.producerTP:
+            try:
+                await self.producerTP.stop()
+            except Exception as e:
+                self.logger.warning(f"Error while stopping Kafka producerTP: {e}")
 
     async def run(self):
         """Main method to run the trading pairs fetcher."""
+        await self.dbhandler.create_pool()  # Create database connection pool
         
         # Wait for Kafka to be ready
         if not await self.wait_for_kafka():
             self.logger.error("Exiting due to Kafka initialization failure.")
             return
         
-        # Create Kafka producer
-        self.producer = await self.create_kafka_producer()
-
+        # Create Kafka producerTP
+        self.logger.info(f"Producer starting TPFetch ")
+        self.producerTP = await self.create_kafka_producer()
+        await self.fetch_trading_pairs()
         # Run fetch_trading_pairs every hour
-        while True:
+        """while True:
             await self.fetch_trading_pairs()
-            await asyncio.sleep(3600)  # Wait for 1 hour
+            await asyncio.sleep(3600)  # Wait for 1 hour"
+            """

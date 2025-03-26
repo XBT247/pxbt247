@@ -24,7 +24,7 @@ class KafkaBase:
         self.trading_pairs = {}  # Dictionary to store trading pairs
         self.producer = None  # Kafka producer instance
         self.logger = logger  # Use the shared logger
-        self.highload_pairs = ['btcusdt', 'ethusdt', 'xrpusdt', 'bnbusdt']
+        self.highload_pairs = ['btcusdt', 'ethusdt', 'xrpusdt', 'bnbusdt', 'usdcusdt', 'btcfdusd']
 
         self.config_kafka = self.config["kafka"]
         self.config_db = self.config["database"]
@@ -89,19 +89,24 @@ class KafkaBase:
 
     async def fetch_trading_pairs(self):
         """Fetch trading pairs from the Kafka compact cache."""
+        self.logger.info(f"Base fetch_trading_pairs into self.trading_pairs.")
         consumer = None
         try:
             consumer = await self.create_kafka_consumer(self.topicTradingPairsCache, "trading-pairs-fetcher")
             await consumer.start()
             i = 0
-            async for message in consumer:
-                key = message.key.decode('utf-8')
-                #self.logger.info(f"key= {key}")
-                value = message.value
-                self.trading_pairs[key] = value
-                i += 1
-            await consumer.stop()
+            try:
+                async for message in consumer:
+                    key = message.key.decode('utf-8')
+                    value = message.value
+                    self.trading_pairs[key] = value
+                    self.logger.info(f"{i}. Received trading pair {key}")
+                    i += 1
+            except Exception as e:
+                self.logger.error(f"Error processing Kafka message: {e}")
+            self.logger.info(f"Received trading pairs from Kafka into self.trading_pairs.")
             self.logger.info(f"Received {i} trading pairs from Kafka into self.trading_pairs.")
+            asyncio.sleep(2)
         except KafkaError as e:
             self.logger.error(f"Failed to fetch trading pairs: {e}")
             raise

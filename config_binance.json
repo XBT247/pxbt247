@@ -79,7 +79,7 @@
       "bootstrap_servers": "kafka:9092"
     },
     "database": {
-      "host": "localhost",
+      "host": "host.docker.internal",
       "port": 3306,
       "user": "root",
       "password": "",

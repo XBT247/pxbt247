@@ -1,29 +1,7 @@
 import asyncio
 import signal
-import os
-import sys
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 from producer_binance import KafkaProducerBinance
-
-class CodeReloader(FileSystemEventHandler):
-    def on_modified(self, event):
-        if event.src_path.endswith(".py"):
-            print(f"Detected change in {event.src_path}, restarting...")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-
-async def watch_files():
-    observer = Observer()
-    event_handler = CodeReloader()
-    observer.schedule(event_handler, path=".", recursive=True)
-    observer.start()
-    
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        observer.stop()
-        observer.join()
+from tradingpairs_binance import TradingPairsFetcher
 
 async def run_producer():
     producer = KafkaProducerBinance()
@@ -34,16 +12,15 @@ async def run_producer():
         producer.logger.info("Producer was cancelled.")
     except Exception as e:
         producer.logger.error(f"Unexpected error in producer: {e}")
-    finally:
-        await producer.cleanup()  # Ensure resources are cleaned up
 
-async def main():    
-    watchdog_task = asyncio.create_task(watch_files())
-    consumer_tasks = asyncio.create_task(run_producer())
-    all_tasks = [watchdog_task, consumer_tasks]
+async def main():
+    stop_event = asyncio.Event()
+
+    # Start producer as a continuous task
+    taskP = asyncio.create_task(run_producer())
+    all_tasks = [taskP]
 
     # Handle graceful shutdown
-    stop_event = asyncio.Event()
     def handle_shutdown(*args):
         print("Received shutdown signal, cancelling tasks...")
         stop_event.set()
@@ -58,7 +35,7 @@ async def main():
         task.cancel()
     await asyncio.gather(*all_tasks, return_exceptions=True)
     print("Shutdown complete.")
-    
+
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

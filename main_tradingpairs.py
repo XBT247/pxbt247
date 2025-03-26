@@ -25,22 +25,31 @@ async def watch_files():
         observer.stop()
         observer.join()
 
-async def run_producer():
-    producer = TradingPairsFetcher()
+async def run_tradingpairsfetcher():
+    producerTP = TradingPairsFetcher()
     try:
-        producer.logger.info("run_producer TradingPairsFetcher will run now")
-        await producer.run()
+        producerTP.logger.info("run_tradingpairsfetcher TradingPairsFetcher will run now")
+        await producerTP.run()
     except asyncio.CancelledError:
-        producer.logger.info("Producer was cancelled.")
+        producerTP.logger.info("producerTP was cancelled.")
     except Exception as e:
-        producer.logger.error(f"Unexpected error in producer: {e}")
+        producerTP.logger.error(f"Unexpected error in producerTP: {e}")
     finally:
-        await producer.cleanup()  # Ensure resources are cleaned up
+        await producerTP.cleanup()  # Ensure resources are cleaned up
+
+async def periodic_task(interval, stop_event):
+    """Runs `run_tradingpairsfetcher` immediately and then every `interval` seconds."""
+    await run_tradingpairsfetcher()  # Run immediately
+    while not stop_event.is_set():
+        await asyncio.sleep(interval)  # Wait for the interval
+        await run_tradingpairsfetcher()  # Run again
 
 async def main():    
-    watchdog_task = asyncio.create_task(watch_files())
-    consumer_tasks = asyncio.create_task(run_producer())
-    all_tasks = watchdog_task + consumer_tasks
+    # watchdog_task = asyncio.create_task(watch_files())
+     # Start TradingPairsFetcher every hour (3600 seconds)
+    stop_event = asyncio.Event()
+    taskT = asyncio.create_task(periodic_task(3600, stop_event))
+    all_tasks = [taskT]
 
     # Handle graceful shutdown
     stop_event = asyncio.Event()
@@ -66,8 +75,3 @@ if __name__ == "__main__":
         loop.run_until_complete(main())
     finally:
         loop.close()
-
-
-if __name__ == "__main__":
-    fetcher = TradingPairsFetcher()
-    asyncio.run(fetcher.run())
