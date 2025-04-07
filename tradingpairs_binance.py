@@ -81,7 +81,7 @@ class TradingPairsFetcher(KafkaBase):
                             self.quote_currencies[symbol_info['quoteAsset'].lower()] = 0.0  # Initialize price to 0.0
 
                             # Publish trading pair to Kafka cache topic
-                            #await self.publish_to_kafka_cache(trading_pair)
+                            await self.publish_to_kafka_cache(trading_pair)
 
                             # Save trading pair information to the database
                             await self.dbhandler.save_trading_pair(trading_pair)

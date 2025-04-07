@@ -31,7 +31,7 @@ async def run_consumer(consumer_id, group_id):
 
 async def main():
     NUM_CONSUMERS = 3
-    group_id = "trading-consumers"
+    group_id = "cgRawTrades"
 
     watchdog_task = asyncio.create_task(watch_files())
     consumer_tasks = [asyncio.create_task(run_consumer(i, group_id)) for i in range(NUM_CONSUMERS)]

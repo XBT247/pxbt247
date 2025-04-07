@@ -79,10 +79,12 @@
       "bootstrap_servers": "kafka:9092"
     },
     "database": {
-      "host": "host.docker.internal",
+      "host": "172.17.0.1", 
+      "hostLocal": "192.168.0.193", 
+      "hostLive": "172.17.0.1", 
       "port": 3306,
-      "user": "root",
-      "password": "",
+      "user": "udock",
+      "password": "Admin@12345",
       "database": "dbcandles"
     },
     "batch_size": 50

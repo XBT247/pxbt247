@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal, ROUND_DOWN
 import json
 import aiohttp
 import datetime
@@ -29,15 +30,58 @@ class KafkaProducerBinance(KafkaBase):
             'st': None,
             'et': None
         })    
-    def PriceRounding(self, price):
-        if 1 <= price < 1000:
-            return round(price, 2)
-        elif price >= 1000:
-            return round(price, 1)
-        else:
+    def PriceRounding1(self, price):
+        if not isinstance(price, (int, float)):
             return price
+            
+        s = f"{price:.15f}"  # Convert to string with 15 decimal places
+        
+        if price >= 1000:
+            # For prices ≥1000: keep 1 decimal
+            dot_pos = s.find('.')
+            return float(s[:dot_pos+2])
+        elif 1 <= price < 1000:
+            # For 1-1000: keep 3 decimals
+            dot_pos = s.find('.')
+            return float(s[:dot_pos+4])
+        elif 0.001 <= price < 1:
+            # For 0.001-1: keep 5 decimals
+            dot_pos = s.find('.')
+            return float(s[:dot_pos+6])
+        elif price < 0.001:
+            # For <0.001: keep 7 decimals
+            dot_pos = s.find('.')
+            return float(s[:dot_pos+8])
+        return price
     
-    async def calculate_qusd(self, symbol, quantity, price):
+    def PriceRounding(self, price):
+        if not isinstance(price, (int, float, Decimal)):
+            return price
+        
+        # Lightweight check for common cases (avoids Decimal overhead)
+        if price == 0:
+            return 0.0
+        if isinstance(price, int) and price >= 1000:
+            return float(price)
+
+        # Only use Decimal for problematic floats
+        if isinstance(price, float) and not price.is_integer():
+            price_dec = Decimal(str(price)).quantize(
+                Decimal('0.1') if price >= 1000 else
+                Decimal('0.001') if price >= 1 else
+                Decimal('0.00001') if price >= 0.001 else
+                Decimal('0.0000001') if price >= 0.00001 else
+                Decimal('0.000000001') if price >= 0.0000001 else
+                Decimal('0.00000000001') if price >= 0.000000001 else
+                Decimal('0.0000000000001') if price >= 0.00000000001 else
+                Decimal('0.000000000000001'),
+                rounding=ROUND_DOWN
+            )
+            return float(price_dec)
+        
+        return float(price)
+    
+    async def calculate_qusd(self, symbol, quantity, price, is_buyer_maker):
         """Calculate the quantity in USD for a given trade."""
         try:
             # Get the trading pair information
@@ -50,7 +94,7 @@ class KafkaProducerBinance(KafkaBase):
 
             # Calculate quantity in USD
             qusd = self.PriceRounding(quantity * quote_usd_price)
-            self.logger.info(f"{trading_pair['base_asset'].lower()}/{trading_pair['quote_asset'].lower()} q:{quantity} p:{price} usd:{quote_usd_price} qusd:{qusd}")    
+            self.logger.info(f"{trading_pair['base_asset'].lower()}/{trading_pair['quote_asset'].lower()},{quantity},{price},{quote_usd_price},{qusd},{is_buyer_maker}")    
             return qusd
         except Exception as e:
             self.logger.error(f"Error calculating quantity in USD for {symbol}: {e}")
@@ -88,13 +132,16 @@ class KafkaProducerBinance(KafkaBase):
     async def process_trade(self, trade):
         symbol = trade['s'].lower()
         data = self.symbol_data[symbol]
+        is_buyer_maker = trade['m']
         price = float(trade['p']) 
         price = self.PriceRounding(float(trade['p']))
         quantity = self.PriceRounding(float(trade['q']) * price)
-        qusd = 0
+        qusd = quantity
         # If this is a quote currency pair (e.g., BTCUSDT, ETHUSDT), update the quote currency price in USD
         quote_currency = None
-        if symbol.endswith("usdt") and self.trading_pairs.get(symbol, None):  # Direct quote currency pair (e.g., btcusdt)
+        # eur(available) brl jpy try dai zar pln ars tusd cop
+        if ((symbol.endswith("usdt") or symbol.endswith("jpy") or symbol.endswith("fdusd") or symbol.endswith("try"))
+            and self.trading_pairs.get(symbol, None)):  # Direct quote currency pair (e.g., btcusdt)
             # Extract the quote currency (e.g., "btc" from "btcusdt")
             quote_currency = self.trading_pairs.get(symbol, None)['base_asset']
             #self.logger.info(f"qc: {quote_currency}, isAvailable: {quote_currency in self.quote_assets}")
@@ -117,8 +164,7 @@ class KafkaProducerBinance(KafkaBase):
         and not symbol.endswith("usdc") 
         and not symbol.endswith("fdusd") 
         and not symbol.endswith("try")):
-            qusd = await self.calculate_qusd(symbol, quantity, price)            
-        is_buyer_maker = trade['m']
+            qusd = await self.calculate_qusd(symbol, quantity, price, is_buyer_maker)            
         #self.logger.info(f" {symbol} p:{price}, q:{quantity}, qusd:{qusd}")
         if data['o'] is None:
             data['o'] = price
@@ -162,6 +208,7 @@ class KafkaProducerBinance(KafkaBase):
             await asyncio.sleep(secWait5)
                 #await asyncio.sleep(5)  # Publish every 10 seconds
             #self.logger.info(self.symbol_data)
+            reset_symbols = []
             for symbol, data in self.symbol_data.items():
                 #self.logger.info(f"Published1 to Kafka topic binance.{symbol}: {data}")
                 if data['st']:
@@ -170,23 +217,30 @@ class KafkaProducerBinance(KafkaBase):
                     try:
                         await self.producer.send(topic, key=key, value=data)
                         self.logger.info(f"Publish {symbol}: {data}")
+                        reset_symbols.append(symbol)
                     except Exception as e:
                         self.logger.error(f"Failed to publish data for {symbol}: {e}")
+                    
+            # Reset after iteration complete
+            for symbol in reset_symbols:
+                try:
                     self.symbol_data[symbol] = {  # Reset data for the next window
-                        'q': 0,
-                        'qusd': 0,
-                        'qs': 0,
-                        'qb': 0,
-                        't': 0,
-                        'ts': 0,
-                        'tb': 0,
-                        'o': None,
-                        'c': None,
-                        'h': None,
-                        'l': None,
-                        'st': None,
-                        'et': None
-                    }
+                            'q': 0,
+                            'qusd': 0,
+                            'qs': 0,
+                            'qb': 0,
+                            't': 0,
+                            'ts': 0,
+                            'tb': 0,
+                            'o': None,
+                            'c': None,
+                            'h': None,
+                            'l': None,
+                            'st': None,
+                            'et': None
+                        }
+                except Exception as e:
+                    self.logger.error(f"Error resetting symbol data for {symbol}: {e}")
 
     async def run(self):
         """Main method to run the producer."""

@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -11,101 +13,74 @@ services:
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENERS: "INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:19092"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092,EXTERNAL://45.77.22.39:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
       CLUSTER_ID: "CmCBBf8dR-mZw1wmpoTTHA"
       KAFKA_LOG_CLEANER_ENABLE: "true"
       KAFKA_LOG4J_LOGGERS: "org.apache.kafka.image.loader.MetadataLoader=warn"
     volumes:
       - kafka-data:/var/lib/kafka/data
       - kafka-metadata:/var/lib/kafka/metadata
-      - ./server.properties:/etc/kafka/server.properties  # Mount custom server.properties
+      - ./server.properties:/etc/kafka/server.properties
     networks:
-      - kafka-net
-
-  mysql:
-    image: mysql:8.0
-    container_name: mysql
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpwd
-      MYSQL_DATABASE: dbcandles      
-      MYSQL_PASSWORD: rootpwd
-    volumes:
-      - mysql-data:/var/lib/mysql
-    networks:
-      - kafka-net
-
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin
-    container_name: phpmyadmin
-    restart: always
-    environment:
-      PMA_HOST: mysql
-    ports:
-      - "8080:80"
+      kafka-net:
+        aliases:
+          - kafka
 
   tradingpairs:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.binance.fetchpairs
-    container_name: tradingpairs
+    command: python main_tradingpairs.py
+    container_name: tradingpairs    
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      MYSQL_HOST: mysql
-      MYSQL_USER: root
-      MYSQL_PASSWORD: rootpassword
-      MYSQL_DATABASE: dbcandles
-    depends_on:
-      - kafka
-      - mysql
+      MYSQL_HOST: 172.17.0.1
+      MYSQL_PORT: 3306      
     networks:
       - kafka-net
+
   producer:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.binance.consumer
     container_name: producer
     command: python main_producer.py
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      MYSQL_HOST: mysql
-      MYSQL_USER: root
-      MYSQL_PASSWORD: rootpassword
-      MYSQL_DATABASE: dbcandles
+      MYSQL_HOST: host.docker.internal
+      MYSQL_PORT: 3306
     depends_on:
       - kafka
-      - mysql
-      - tradingpairs
     networks:
       - kafka-net
 
   consumer:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.binance.producer
     container_name: consumer
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      MYSQL_HOST: mysql
-      MYSQL_USER: root
-      MYSQL_PASSWORD: rootpassword
-      MYSQL_DATABASE: dbcandles
+      MYSQL_HOST: host.docker.internal
+      MYSQL_PORT: 3306
     depends_on:
       - kafka
-      - mysql
-      - producer
     networks:
       - kafka-net
 
 volumes:
-  mysql-data:
   kafka-data:
   kafka-metadata:
 
 networks:
   kafka-net:
+    driver: bridge
+  default:
     driver: bridge

@@ -35,6 +35,7 @@ async def run_tradingpairsfetcher():
     except Exception as e:
         producerTP.logger.error(f"Unexpected error in producerTP: {e}")
     finally:
+        producerTP.logger.info(" cleanup.")
         await producerTP.cleanup()  # Ensure resources are cleaned up
 
 async def periodic_task(interval, stop_event):

@@ -21,7 +21,7 @@ async def run_consumer(consumer_id, group_id):
 
 async def main():
     # Run Producer and Consumer in separate event loops
-    group_id="trading-consumers"
+    group_id="cgRawTrades"
     consumer_tasks = [asyncio.create_task(run_consumer(i, group_id)) for i in range(NUM_CONSUMERS)]
     producer_task = asyncio.create_task(run_producer())
     #consumer_task = asyncio.create_task(run_consumer())

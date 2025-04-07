@@ -46,6 +46,9 @@ class KafkaBase:
                 # Optional: Configure other parameters like request_timeout_ms, retry_backoff_ms, etc.
                 request_timeout_ms=30000,  # Increase timeout for better reliability
                 retry_backoff_ms=1000,     # Delay between retries in milliseconds
+                #batch_size=32 * 1024,  # Set batch size to 32 KB
+                #linger_ms=10,  # Wait up to 10ms to accumulate messages before sending
+                #acks='all',  # Wait for all replicas to acknowledge the message
             )
             await producer.start()  # Start the producer
             self.logger.info("Kafka Producer created successfully.")

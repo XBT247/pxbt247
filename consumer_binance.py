@@ -5,12 +5,14 @@ import asyncio
 from aiokafka.errors import KafkaError
 from kafka import KafkaAdminClient
 from base_binance import KafkaBase
+from dbhandler import DBHandler
 from trend_aware import TrendAware
 import aiomysql
 
 class KafkaConsumerBinance(KafkaBase):
-    def __init__(self, consumer_id, group_id="trading-consumers"):
+    def __init__(self, consumer_id, group_id="cgRawTrades"):
         super().__init__()
+        self.dbhandler = DBHandler(self.config_db)  # Initialize DB handler
         self.consumer_id = consumer_id
         self.group_id = group_id
         self.local_cache = OrderedDict()  # ✅ LRU Cache to manage memory
