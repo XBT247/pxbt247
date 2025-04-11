@@ -56,20 +56,27 @@ services:
       MYSQL_PORT: 3306
     depends_on:
       - kafka
+      - tradingpairs
     networks:
       - kafka-net
 
   consumer:
     build:
       context: .
-      dockerfile: Dockerfile.binance.consumer
+      dockerfile: Dockerfile.binance.producer
     container_name: consumer
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       MYSQL_HOST: host.docker.internal
       MYSQL_PORT: 3306
+      MYSQL_USER: udock
+      MYSQL_PASSWORD: Admin@12345
+      MYSQL_DATABASE: dbcandles
     depends_on:
       - kafka
+      - producer
     networks:
       - kafka-net
 

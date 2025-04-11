@@ -1,13 +1,10 @@
 from collections import OrderedDict
 import json
-import logging
 import asyncio
 from aiokafka.errors import KafkaError
-from kafka import KafkaAdminClient
 from base_binance import KafkaBase
 from dbhandler import DBHandler
 from trend_aware import TrendAware
-import aiomysql
 
 class KafkaConsumerBinance(KafkaBase):
     def __init__(self, consumer_id, group_id="cgRawTrades"):
@@ -21,55 +18,6 @@ class KafkaConsumerBinance(KafkaBase):
         self.consumerCache = None
         self.producer = None
         self.logger.info("Consumer {consumer_id} initialized with aiokafka.")
-
-    async def create_table_if_not_exists(self, symbol):
-        """Create a table in MySQL if it does not exist, using the schema of an existing table."""
-        async with await self.create_db_connection() as conn:
-            async with conn.cursor() as cursor:
-                try:
-                    # Use the schema of an existing table (e.g., tbl_binance_template)
-                    await cursor.execute(f"""
-                        CREATE TABLE tbl_binance_{symbol.lower()} LIKE tbl_binance_template
-                    """)
-                    await conn.commit()
-                    self.logger.info(f"Table 'tbl_binance_{symbol.lower()}' created successfully.")
-                except Exception as e:
-                    self.logger.error(f"Failed to create table 'tbl_binance_{symbol.lower()}': {e}")
-                    await conn.rollback()
-
-    async def insert_into_db(self, symbol, data):
-        """Insert data into the database, creating the table if it does not exist."""
-        query = f"""
-            INSERT INTO tbl_binance_{symbol.lower()} 
-            (seller_qty, buyer_qty, seller_trades, buyer_trades, open_price, close_price, high_price, low_price, start_time, end_time)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        async with await self.create_db_connection() as conn:
-            async with conn.cursor() as cursor:
-                try:
-                    await cursor.execute(query, (
-                        data['seller_qty'], data['buyer_qty'], data['seller_trades'], data['buyer_trades'],
-                        data['open_price'], data['close_price'], data['high_price'], data['low_price'],
-                        data['start_time'], data['end_time']
-                    ))
-                    await conn.commit()
-                    self.logger.info(f"Inserted data for {symbol}")
-                except Exception as e:
-                    # Check if the exception is related to a missing table
-                    if "Table" in str(e) and "doesn't exist" in str(e):
-                        self.logger.info(f"Table 'tbl_binance_{symbol.lower()}' does not exist. Creating it...")
-                        await self.create_table_if_not_exists(symbol)
-                        # Retry the insertion after creating the table
-                        await cursor.execute(query, (
-                            data['seller_qty'], data['buyer_qty'], data['seller_trades'], data['buyer_trades'],
-                            data['open_price'], data['close_price'], data['high_price'], data['low_price'],
-                            data['start_time'], data['end_time']
-                        ))
-                        await conn.commit()
-                        self.logger.info(f"Inserted data for {symbol} after creating the table.")
-                    else:
-                        self.logger.error(f"Failed to insert data for {symbol}: {e}")
-                        await conn.rollback()
 
     async def get_cached_object(self, symbol):
         """Fetch cached object from in-memory LRU cache."""
@@ -106,32 +54,59 @@ class KafkaConsumerBinance(KafkaBase):
             self.logger.error("Exiting due to Kafka initialization failure.")
             return
         self.consumer = await self.create_kafka_consumer(self.topicTradesRaw, self.group_id)
-        self.consumerCache = self.create_kafka_consumer(self.cacheTrendaware, "cache-reader")  # ✅ Create it once
-        self.producer = await self.create_kafka_producer()
+        #self.consumerCache = self.create_kafka_consumer(self.cacheTrendaware, "cache-reader")  # ✅ Create it once
+        #self.producer = await self.create_kafka_producer()
         """Main consumer loop that processes raw trade data in batches."""
-        await self.consumer.start()
-        await self.producer.start()
+        #await self.producer.start()
         # ✅ Start cache listener asynchronously
-        asyncio.create_task(self.cache_listener())
+        #asyncio.create_task(self.cache_listener())
         try:
+            await self.dbhandler.load_known_tables()
+            await self.consumer.start()
+            
+            # Start periodic batch flusher
+            asyncio.create_task(self._periodic_batch_flusher())
+            
             while True:
                 batch = await self.consumer.getmany(timeout_ms=100, max_records=50)
+                if not batch:
+                    await asyncio.sleep(0.5)  # Increased sleep when no messages
+                    continue
+                # Add small sleep between processing batches
+                await asyncio.sleep(0.05)  # 50ms delay reduces CPU usage
+
                 tasks = []
+                
                 for tp, messages in batch.items():
                     for message in messages:
-                        symbol = message.key.decode('utf-8')  # Trading pair symbol is the key
-                        trade_data = json.loads(message.value.decode())
-                        tasks.append(self.process_trade_data(symbol, trade_data))
-
-                # ✅ Process all messages in parallel
-                await asyncio.gather(*tasks)
-
-                # ✅ Commit offsets after batch processing
+                        symbol = message.key.decode('utf-8').lower()
+                        trade_data = message.value
+                        
+                        # Process trade and add to batch
+                        tasks.append(
+                            self.dbhandler.add_to_batch(symbol, trade_data)
+                        )
+                        #tasks.append(self.process_trade_data(symbol, trade_data))
+                
+                await asyncio.gather(*tasks, return_exceptions=True)
                 await self.consumer.commit()
-                await asyncio.sleep(0.01)
+                
+        except Exception as e:
+            self.logger.error(f"Consumer error: {e}")
         finally:
+            # Flush any remaining batches before shutdown
+            await self.dbhandler.flush_batches()
             await self.consumer.stop()
-            await self.producer.stop()
+            await self.dbhandler.close_pool()
+
+    async def _periodic_batch_flusher(self):
+        """Periodically flush batches to prevent stale data."""
+        while True:
+            await asyncio.sleep(self.dbhandler.batch_timeout)
+            try:
+                await self.dbhandler.start_periodic_flusher()
+            except Exception as e:
+                self.logger.error(f"Periodic flush failed: {e}")
 
     async def cache_listener(self):
         """Listens to the cache topic and updates local cache periodically."""

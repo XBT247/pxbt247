@@ -169,13 +169,15 @@ class KafkaProducerBinance(KafkaBase):
         if data['o'] is None:
             data['o'] = price
             data['st'] = trade['T']
+        
         data['c'] = price
         data['q'] += quantity
         data['qusd'] += qusd
         data['h'] = max(data['h'], price) if data['h'] else price
         data['l'] = min(data['l'], price) if data['l'] else price
         data['et'] = trade['T']
-
+        if qusd == 0:
+            qusd = quantity
         if is_buyer_maker:
             data['qs'] += qusd
             data['ts'] += 1
