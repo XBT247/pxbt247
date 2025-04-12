@@ -13,12 +13,26 @@ async def run_producer():
     except Exception as e:
         producer.logger.error(f"Unexpected error in producer: {e}")
 
+async def health_check(producer):
+    """Periodically check the health of the Kafka producer."""
+    while True:
+        try:
+            if producer.producer is not None and producer.producer._closed is False:
+                producer.logger.info("Kafka producer is healthy.")
+            else:
+                producer.logger.error("Kafka producer is not healthy.")
+        except Exception as e:
+            producer.logger.error(f"Health check failed: {e}")
+        await asyncio.sleep(30)  # Check health every 30 seconds
+
 async def main():
     stop_event = asyncio.Event()
 
     # Start producer as a continuous task
+    producer = KafkaProducerBinance()
     taskP = asyncio.create_task(run_producer())
-    all_tasks = [taskP]
+    health_task = asyncio.create_task(health_check(producer))
+    all_tasks = [taskP, health_task]
 
     # Handle graceful shutdown
     def handle_shutdown(*args):

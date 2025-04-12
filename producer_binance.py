@@ -14,9 +14,11 @@ class KafkaProducerBinance(KafkaBase):
     def __init__(self):
         super().__init__()       
         self.quote_assets = set()
+        self.trade_logs_buffer = []  # Ensure this is always initialized as a list
         self.dbhandler = DBHandler(self.config_db)  # Initialize DB handler
         self.symbol_data = defaultdict(lambda: {
             'q': 0,
+            'qp': None, # Quote price in USD
             'qusd': 0,
             'qs': 0,
             'qb': 0,
@@ -88,14 +90,21 @@ class KafkaProducerBinance(KafkaBase):
             trading_pair = self.trading_pairs.get(symbol)
             if not trading_pair:
                 self.logger.warning(f"No trading pair found for symbol: {symbol}")
-                return quantity
-            # Get the quote currency's USD value
-            quote_usd_price = self.quote_currencies.get(trading_pair['quote_asset'].lower(), 0.0)
-
+                return quantity, None
+            # Get the quote currency's USD value            
+            quote_info = self.quote_currencies.get(trading_pair['quote_asset'].lower(), None)
+            if not quote_info:
+                return quantity, None
+            quote_usd_price = quote_info["price"]
+            isUSDTBased = quote_info["isUSDTBased"]
+            if quote_usd_price == 0.0:
+                return quantity, None
             # Calculate quantity in USD
-            qusd = self.PriceRounding(quantity * quote_usd_price)
-            self.logger.info(f"{trading_pair['base_asset'].lower()}/{trading_pair['quote_asset'].lower()},{quantity},{price},{quote_usd_price},{qusd},{is_buyer_maker}")    
-            return qusd
+            qusd = self.PriceRounding(quantity / quote_usd_price) if isUSDTBased else self.PriceRounding(quantity * quote_usd_price)
+            #self.logger.info(f"{trading_pair['base_asset'].lower()}/{trading_pair['quote_asset'].lower()},{quantity},{price},{quote_usd_price},{qusd},{is_buyer_maker}")    
+            
+            self.trade_logs_buffer.append(f"s:{symbol},q:{quantity},p:{price},qp:{quote_usd_price},pu:{qusd},bm:{is_buyer_maker};")
+            return qusd, quote_usd_price
         except Exception as e:
             self.logger.error(f"Error calculating quantity in USD for {symbol}: {e}")
             return quantity
@@ -109,8 +118,8 @@ class KafkaProducerBinance(KafkaBase):
                 #uri = f"wss://stream.binance.com:9443/ws/{'@trade/'.join(symbols).lower()}@trade"
                 async with websockets.connect(
                     uri,
-                    ping_interval=20,  # Send ping every 20 seconds
-                    ping_timeout=10,   # Wait 10 seconds for a pong response
+                    ping_interval=10,  # Send ping every 20 seconds
+                    ping_timeout=5,   # Wait 10 seconds for a pong response
                 ) as websocket:
                     self.logger.info(f"Connected to WebSocket for symbols: {symbols}")
                     while True:
@@ -137,40 +146,40 @@ class KafkaProducerBinance(KafkaBase):
         price = self.PriceRounding(float(trade['p']))
         quantity = self.PriceRounding(float(trade['q']) * price)
         qusd = quantity
+        quote_usd_price = None
         # If this is a quote currency pair (e.g., BTCUSDT, ETHUSDT), update the quote currency price in USD
         quote_currency = None
+        isUSDTBased = False
         # eur(available) brl jpy try dai zar pln ars tusd cop
-        if ((symbol.endswith("usdt") or symbol.endswith("jpy") or symbol.endswith("fdusd") or symbol.endswith("try"))
-            and self.trading_pairs.get(symbol, None)):  # Direct quote currency pair (e.g., btcusdt)
+        if (self.trading_pairs.get(symbol, None)):  # Direct quote currency pair (e.g., btcusdt)
             # Extract the quote currency (e.g., "btc" from "btcusdt")
             quote_currency = self.trading_pairs.get(symbol, None)['base_asset']
-            #self.logger.info(f"qc: {quote_currency}, isAvailable: {quote_currency in self.quote_assets}")
-            if (quote_currency 
-                and quote_currency.lower() in self.quote_assets 
-                and quote_currency.lower()!= 'usdc'
-                and quote_currency.lower()!= 'fdusd'
-                ):
+            if (quote_currency == "usdt"):
+                #self.logger.info(f"{symbol} qc: {quote_currency}, isAvailable: {quote_currency in self.quote_assets} USDT ")
+                isUSDTBased = True
+                quote_currency = self.trading_pairs.get(symbol, None)['quote_asset']
+
+            if (quote_currency and quote_currency.lower() in self.quote_assets):
                 quote_currency = quote_currency.lower()
                 #self.logger.info(f"quote_currency {quote_currency} p: {price} sofar: {len(self.quote_currencies)}")
                 if self.quote_currencies.get(quote_currency, None) == None:
                     self.logger.info(self.quote_currencies)
-
-                self.quote_currencies[quote_currency] = price  # Update the btc price in USDT
-                # Publish the latest USD price to Kafka cache topic
-                #await self.producer.send(self.topicQuoteUSDCache, key=quote_currency.encode('utf-8'), value=price)
-                #self.logger.info(f"Published USD price for {quote_currency}: {price}")
-                # Calculate quantity in USD
+                # Update the btc price in USDT
+                self.quote_currencies[quote_currency] = {
+                    "price": price,
+                    "isUSDTBased": isUSDTBased
+                }
         if (not symbol.endswith("usdt") 
         and not symbol.endswith("usdc") 
-        and not symbol.endswith("fdusd") 
-        and not symbol.endswith("try")):
-            qusd = await self.calculate_qusd(symbol, quantity, price, is_buyer_maker)            
+        and not symbol.endswith("fdusd")):
+            qusd, quote_usd_price = await self.calculate_qusd(symbol, quantity, price, 0 if is_buyer_maker else 1)            
         #self.logger.info(f" {symbol} p:{price}, q:{quantity}, qusd:{qusd}")
         if data['o'] is None:
             data['o'] = price
             data['st'] = trade['T']
         
         data['c'] = price
+        data['qp'] = quote_usd_price
         data['q'] += quantity
         data['qusd'] += qusd
         data['h'] = max(data['h'], price) if data['h'] else price
@@ -206,19 +215,18 @@ class KafkaProducerBinance(KafkaBase):
             # If it's already the 5th second, wait for the next minute
             if secWait5 == 0:
                 secWait5 = 5
-            self.logger.info(f"Waiting {secWait5}")
+            self.logger.info(f"{current_second}")
             await asyncio.sleep(secWait5)
                 #await asyncio.sleep(5)  # Publish every 10 seconds
             #self.logger.info(self.symbol_data)
             reset_symbols = []
             for symbol, data in self.symbol_data.items():
                 #self.logger.info(f"Published1 to Kafka topic binance.{symbol}: {data}")
-                if data['st']:
-                    topic = self.topicTradesRaw #f"binance.{symbol}"
+                if data['st'] and data['t'] > 3:                    
                     key = symbol.encode('utf-8')  # Use trading pair symbol as the key                    
                     try:
-                        await self.producer.send(topic, key=key, value=data)
-                        self.logger.info(f"Publish {symbol}: {data}")
+                        await self.producer.send(self.topicTradesRaw, key=key, value=data)
+                        #self.logger.info(f"Publish {symbol}: {data}")
                         reset_symbols.append(symbol)
                     except Exception as e:
                         self.logger.error(f"Failed to publish data for {symbol}: {e}")
@@ -228,6 +236,7 @@ class KafkaProducerBinance(KafkaBase):
                 try:
                     self.symbol_data[symbol] = {  # Reset data for the next window
                             'q': 0,
+                            'qp': None,
                             'qusd': 0,
                             'qs': 0,
                             'qb': 0,
@@ -244,6 +253,9 @@ class KafkaProducerBinance(KafkaBase):
                 except Exception as e:
                     self.logger.error(f"Error resetting symbol data for {symbol}: {e}")
 
+            await self.producer.send(self.topicTradesLog, key="NoKey".encode('utf-8'), value="\n".join(self.trade_logs_buffer).encode('utf-8'))
+            self.trade_logs_buffer.clear()
+
     async def run(self):
         """Main method to run the producer."""
         # Fetch trading pairs initially
@@ -259,6 +271,8 @@ class KafkaProducerBinance(KafkaBase):
             self.trading_pairs = await self.dbhandler.fetch_trading_pairs()
             self.quote_assets = list({pair['quote_asset'] for pair in self.trading_pairs.values()})
             self.logger.info(f"Trading pairs loaded: {len(self.trading_pairs)}, quote_assets: {len(self.quote_assets)}")
+            #self.logger.info(f"Trading Pairs loaded: {len(self.trading_pairs)}, {self.trading_pairs}")
+            #self.logger.info(f"Quote Assets loaded: {len(self.quote_assets)}, {self.quote_assets}")
         except Exception as e:
             self.logger.error(f"Failed to fetch trading pairs")
             raise

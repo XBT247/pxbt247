@@ -79,7 +79,7 @@
       "bootstrap_servers": "kafka:9092"
     },
     "database": {
-      "host": "172.17.0.1", 
+      "host": "192.168.0.193", 
       "hostLocal": "192.168.0.193", 
       "hostLive": "172.17.0.1", 
       "port": 3306,

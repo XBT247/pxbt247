@@ -206,13 +206,13 @@ class DBHandler(KafkaBase):
                         query = f"""
                             INSERT INTO {table_name} 
                             (serverTime, volume, totalVolumeSell, totalVolumeBuy, trades, totalTradesSell, 
-                             totalTradesBuy, open, close, high, low)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             totalTradesBuy, open, close, high, low, qusd_price)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """
                         values = [
                             (
                                 item['et'], item['qusd'] if item.get('qusd', 0) > 0 else item['q'], item['qs'], item['qb'], item['t'], item['ts'], item['tb'],
-                                item['o'], item['c'], item['h'], item['l']
+                                item['o'], item['c'], item['h'], item['l'], item.get('qp', 0) if item.get('qp') else 0
                             ) for item in records
                         ]
                         logData = f"{table_name}: {values}"
@@ -264,8 +264,8 @@ class DBHandler(KafkaBase):
         query = f"""
             INSERT INTO {table_name} 
             (serverTime, volume, totalVolumeSell, totalVolumeBuy, trades, totalTradesSell, 
-                totalTradesBuy, open, close, high, low)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                totalTradesBuy, open, close, high, low, qusd_price)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         
         try:
@@ -273,7 +273,7 @@ class DBHandler(KafkaBase):
                 async with conn.cursor() as cursor:
                     await cursor.execute(query, (
                         data['et'], data['qusd'] if data.get('qusd', 0) > 0 else data['q'], data['qs'], data['qb'], data['t'], data['ts'], data['tb'],
-                                data['o'], data['c'], data['h'], data['l']
+                                data['o'], data['c'], data['h'], data['l'], data.get('qp', 0) if data.get('qp') else 0
                     ))
                     await conn.commit()
         except Exception as e:

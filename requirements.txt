@@ -3,4 +3,4 @@ aiohttp
 websockets
 aiomysql
 python-dotenv
-watchdog
+lz4

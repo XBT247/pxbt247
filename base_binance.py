@@ -32,6 +32,7 @@ class KafkaBase:
         self.config_binance_urls = self.config_binance["urls"]
 
         self.topicTradesRaw = "binance.trades.raw"
+        self.topicTradesLog = "binance.trades.log"
         self.topicTrades = "binance.trades"
         self.cacheTrendaware = "cache.binance.trendaware"
         self.topicTradingPairsCache = "cache.binance.tradingpairs"  # New Kafka cache topic
@@ -46,6 +47,7 @@ class KafkaBase:
                 # Optional: Configure other parameters like request_timeout_ms, retry_backoff_ms, etc.
                 request_timeout_ms=30000,  # Increase timeout for better reliability
                 retry_backoff_ms=1000,     # Delay between retries in milliseconds
+                compression_type='gzip'
                 #batch_size=32 * 1024,  # Set batch size to 32 KB
                 #linger_ms=10,  # Wait up to 10ms to accumulate messages before sending
                 #acks='all',  # Wait for all replicas to acknowledge the message
