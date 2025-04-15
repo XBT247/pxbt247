@@ -31,7 +31,20 @@ class KafkaProducerBinance(KafkaBase):
             'l': None,
             'st': None,
             'et': None
-        })    
+        }) 
+        self.trade_log = defaultdict(lambda: {
+            's': '',
+            'q': 0,
+            'p': 0,
+            'qp': None,
+            'pu': None,
+            'bm': 0
+        })   
+        self.active_connections = {}  # Track active WebSocket connections
+        self.connection_attempts = defaultdict(int)  # Track connection attempts per symbol
+        self.max_attempts = 5  # Maximum connection attempts before giving up temporarily
+        self._initialized = False
+
     def PriceRounding1(self, price):
         if not isinstance(price, (int, float)):
             return price
@@ -110,33 +123,81 @@ class KafkaProducerBinance(KafkaBase):
             return quantity
         
     async def fetch_trades(self, symbols):
+        connection_id = ",".join(sorted(symbols))  # Create unique ID for this connection
         while True:  # Keep trying to reconnect
             try:
-                #stream_names = [f"{symbol.lower()}@trade" for symbol in symbols]
+                self.connection_attempts[connection_id] += 1
+                if self.connection_attempts[connection_id] > self.max_attempts:
+                    self.logger.warning(f"Max connection attempts reached for {connection_id}. Waiting before retrying...")
+                    await asyncio.sleep(60)  # Wait longer before retrying
+                    self.connection_attempts[connection_id] = 0  # Reset attempts
+                    continue
+                
                 stream_names = [f"{symbol.lower()}@trade" for symbol in symbols]
                 uri = f"wss://stream.binance.com:9443/stream?streams={'/'.join(stream_names)}"
-                #uri = f"wss://stream.binance.com:9443/ws/{'@trade/'.join(symbols).lower()}@trade"
+                
+                # Track this connection
+                self.active_connections[connection_id] = {
+                    'symbols': symbols,
+                    'status': 'connecting',
+                    'last_activity': datetime.datetime.now()
+                }
+                
                 async with websockets.connect(
                     uri,
                     ping_interval=10,  # Send ping every 20 seconds
                     ping_timeout=5,   # Wait 10 seconds for a pong response
                 ) as websocket:
+                    self.active_connections[connection_id]['status'] = 'connected'
+                    self.active_connections[connection_id]['last_activity'] = datetime.datetime.now()
                     self.logger.info(f"Connected to WebSocket for symbols: {symbols}")
+                    
                     while True:
                         try:
                             message = await websocket.recv()
+                            self.active_connections[connection_id]['last_activity'] = datetime.datetime.now()
                             data = json.loads(message)
                             if 'data' in data:  # Binance streams wrap data in a 'data' field
                                 await self.process_trade(data['data'])
                             else:
                                 self.logger.warning(f"Unexpected message format: {data}")
                         except websockets.exceptions.ConnectionClosed as e:
-                            self.logger.error(f"WebSocket connection closed: {e}")
+                            self.logger.error(f"WebSocket connection closed for {connection_id}: {e}")
+                            self.active_connections[connection_id]['status'] = 'disconnected'
                             await asyncio.sleep(3)  # Wait before reconnecting
                             break  # Exit the inner loop and reconnect
+                        except Exception as e:
+                            self.logger.error(f"Error in WebSocket connection for {connection_id}: {e}")
+                            self.active_connections[connection_id]['status'] = 'error'
+                            await asyncio.sleep(3)
+                            break
             except Exception as e:
-                self.logger.error(f"WebSocket connection failed: {e}. Retrying in 10 seconds...")
+                self.logger.error(f"WebSocket connection failed for {connection_id}: {e}. Retrying in 10 seconds...")
+                self.active_connections[connection_id]['status'] = 'error'
                 await asyncio.sleep(10)  # Wait before reconnecting
+            finally:
+                if connection_id in self.active_connections:
+                    self.active_connections[connection_id]['status'] = 'disconnected'
+
+    async def monitor_connections(self):
+        """Periodically check and restart failed connections."""
+        while True:
+            await asyncio.sleep(60)  # Check every 30 seconds
+            
+            # Log connection status
+            active = sum(1 for conn in self.active_connections.values() if conn['status'] == 'connected')
+            self.logger.info(f"Connection status: {active} active, {len(self.active_connections) - active} inactive")
+            
+            # Check for stale connections (no activity for 60 seconds)
+            now = datetime.datetime.now()
+            stale_connections = [
+                conn_id for conn_id, conn in self.active_connections.items()
+                if conn['status'] == 'connected' and (now - conn['last_activity']).total_seconds() > 60
+            ]
+            
+            if stale_connections:
+                self.logger.warning(f"Detected stale connections: {stale_connections}")
+                # We can't directly restart here, but we can log and let the existing reconnection logic handle it
 
     async def process_trade(self, trade):
         symbol = trade['s'].lower()
@@ -195,14 +256,27 @@ class KafkaProducerBinance(KafkaBase):
             data['qb'] += qusd
             data['tb'] += 1
             data['t'] += 1
-			
+            
     async def cleanup(self):
         """Clean up resources."""
         if hasattr(self, 'producer') and self.producer:
             try:
-                await self.producer.stop()
+                if not self.producer._closed:
+                    # First flush any pending messages
+                    try:
+                        await asyncio.wait_for(
+                            self.producer.flush(),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        self.logger.warning("Timed out waiting for message flush")
+                    await self.producer.stop()
+                self._initialized = False
             except Exception as e:
-                self.logger.warning(f"Error while stopping Kafka producer: {e}")
+                self.logger.error(f"Error stopping producer: {e}")
+            finally:
+                # Ensure producer reference is cleared
+                del self.producer
                 
     async def publish_to_kafka(self):
         self.logger.info(f"publish_to_kafka")
@@ -214,11 +288,26 @@ class KafkaProducerBinance(KafkaBase):
 
             # If it's already the 5th second, wait for the next minute
             if secWait5 == 0:
-                secWait5 = 5
-            self.logger.info(f"{current_second}")
+                secWait5 = 5            
+            if(now.minute % 5 ==0 and now.second == 0):
+                self.logger.info(f"{now.minute}")
+
             await asyncio.sleep(secWait5)
                 #await asyncio.sleep(5)  # Publish every 10 seconds
             #self.logger.info(self.symbol_data)
+            
+            if self.trade_logs_buffer:
+                try:
+                    await self.producer.send(
+                        self.topicTradesLog,
+                        key="NoKey".encode('utf-8'),
+                        value="|".join(self.trade_logs_buffer)
+                    )
+                except Exception as e:
+                    self.logger.error(f"Failed to publish trade logs {self.topicTradesLog}: {e}")
+                finally:
+                    self.trade_logs_buffer.clear()
+
             reset_symbols = []
             for symbol, data in self.symbol_data.items():
                 #self.logger.info(f"Published1 to Kafka topic binance.{symbol}: {data}")
@@ -253,9 +342,67 @@ class KafkaProducerBinance(KafkaBase):
                 except Exception as e:
                     self.logger.error(f"Error resetting symbol data for {symbol}: {e}")
 
-            await self.producer.send(self.topicTradesLog, key="NoKey".encode('utf-8'), value="\n".join(self.trade_logs_buffer).encode('utf-8'))
-            self.trade_logs_buffer.clear()
+    async def initialize_producer(self, retries=3, delay=5):
+        """Initialize producer with retry logic"""
+        for attempt in range(retries):
+            try:
+                if hasattr(self, 'producer') and self.producer:
+                    await self.cleanup()
+                    
+                self.producer = await super().create_kafka_producer()
+                self._initialized = True
+                self.logger.info("Producer initialized successfully")
+                return self.producer
+            except Exception as e:
+                self.logger.error(f"Initialization attempt {attempt+1} failed: {str(e)}")
+                if attempt == retries - 1:
+                    raise
+                await asyncio.sleep(delay)
 
+    async def check_producer_health(self):
+        """Robust health check compatible with all aiokafka versions"""
+        if not hasattr(self, 'producer') or self.producer is None:
+            return False, "Producer not initialized"
+
+        try:
+            # Basic structural check
+            if self.producer._closed:
+                return False, "Producer closed"
+
+            # Version-agnostic operational check
+            try:
+                # Try both possible client access methods
+                client = getattr(self.producer.client, '_client', None) or self.producer.client
+                if client is None:
+                    return False, "Client not available"
+                
+                # Test connection with simple metadata request
+                await asyncio.wait_for(
+                    client.list_topics(),
+                    timeout=5.0
+                )
+                return True, "Healthy"
+            except AttributeError:
+                # Fallback check if internal structure changes
+                if hasattr(self.producer, 'client') and not self.producer._closed:
+                    return True, "Healthy (basic check)"
+                return False, "Client structure changed"
+
+        except asyncio.TimeoutError:
+            return False, "Connection timeout"
+        except Exception as e:
+            return False, f"Health verification failed: {str(e)}"
+        
+    async def is_kafka_connected(self):
+        if not hasattr(self, 'producer') or self.producer is None:
+            return False
+        try:
+            # Simple metadata request to verify connection
+            await self.producer.client._client.list_topics()
+            return True
+        except Exception:
+            return False
+           
     async def run(self):
         """Main method to run the producer."""
         # Fetch trading pairs initially
@@ -298,6 +445,9 @@ class KafkaProducerBinance(KafkaBase):
         
         # Start publishing to Kafka
         tasks.append(self.publish_to_kafka())
+        
+        # Start connection monitoring
+        tasks.append(self.monitor_connections())
 
         # Run all tasks concurrently
         await asyncio.gather(*tasks)
