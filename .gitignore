@@ -1,0 +1,7 @@
+# Ignore all files larger than 10MB
+*.log
+*.sql
+*.csv
+*.json
+*.txt
+*.xlsx
