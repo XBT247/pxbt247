@@ -20,6 +20,7 @@ class DBHandler(KafkaBase):
         self.error_count = 0
         self.MAX_ERRORS = 5
         self._flush_task = None
+        self._active_connections = set()
 
     def _get_table_name(self, symbol):
         """Generate normalized table name from symbol."""
@@ -37,18 +38,85 @@ class DBHandler(KafkaBase):
                     password=self.db_config['password'],
                     db=self.db_config['database'],
                     minsize=1,  # Minimum connections in pool
-                    maxsize=10, # Maximum connections in pool
-                    autocommit=True
+                    maxsize=4, # Maximum connections in pool
+                    pool_recycle=900,  # 15 minutes
+                    connect_timeout=10,
+                    autocommit=True,
+                    cursorclass=aiomysql.DictCursor
                 )
                 self.logger.info("MySQL connection pool created successfully.")
             except Exception as e:
                 self.logger.error(f"Failed to create MySQL connection pool: {e}")
                 raise
+
+    async def execute_transaction(self, query, params=None, read_only=False, timeout=30):
+        conn = None
+        try:
+            if not self.pool or self.pool._closed:
+                await self.create_pool()
+                
+            conn = await self._get_connection()
+            async with conn.cursor() as cursor:
+                #if timeout:
+                #    await cursor.execute(f"SET SESSION max_statement_time={timeout}")
+                #if timeout and query.strip().upper().startswith('SELECT'):
+                #    query = f"/*+ MAX_EXECUTION_TIME({timeout * 1000}) */ {query}"
+                await cursor.execute(query, params or ())
+                # For SELECT queries, fetch results
+                
+                if(query.strip().upper().startswith('SELECT') 
+                    or query.strip().upper().startswith('SHOW')):
+                    results = await cursor.fetchall()
+                    """if results:
+                        self.logger.info(f"QeuryExec fetchAll {query.strip().upper()} {len(results)} rows")
+                    else:
+                        self.logger.info(f"QeuryExec fetchAll {query.strip().upper()} no rows")
+                    """
+                    return results
+                # For write operations, commit if not read_only
+                elif not read_only:
+                    await conn.commit()
+                    return cursor.rowcount  # Return affected rows count
+                
+                # For read-only write operations (like SELECT FOR UPDATE)
+                return None
+        except (aiomysql.OperationalError, aiomysql.InterfaceError) as e:
+            # Force reconnect on connection errors
+            await self.close_pool()
+            await self.create_pool()
+            raise        
+        except Exception as e:
+            if conn:
+                await conn.rollback()
+            raise
+        finally:
+            if conn:
+                await self._release_connection(conn)
     
+    async def execute_transaction_batch(self, table_name, query, values):
+        """Helper method for batch transactions"""
+        conn = None
+        try:
+            if not self.pool or self.pool._closed:
+                await self.create_pool()
+
+            conn = await self._get_connection()
+            async with conn.cursor() as cursor:
+                await cursor.executemany(query, values)  # Execute batch
+                await conn.commit()  # Commit the transaction
+                return cursor.rowcount  # Return number of affected rows
+        except Exception as e:
+            self.logger.error(f"Batch insert failed for {table_name}: {str(e)}")
+            if conn:
+                await conn.rollback()
+            raise
+        finally:
+            if conn:
+                await self._release_connection(conn)
+
     async def save_trading_pair(self, trading_pair):
         """Save or update trading pair information in the database."""
-        if not self.pool:
-            await self.create_pool()
+        
         query = """
             INSERT INTO tbl_trading_pairs (
                 symbol, status, base_asset, quote_asset, base_asset_precision, quote_asset_precision,
@@ -68,47 +136,42 @@ class DBHandler(KafkaBase):
                 taker_commission = VALUES(taker_commission),
                 max_margin_allowed = VALUES(max_margin_allowed)
         """
+        params = (
+            trading_pair['symbol'].lower(),
+            trading_pair['status'],
+            trading_pair['base_asset'].lower(),
+            trading_pair['quote_asset'].lower(),
+            trading_pair['base_asset_precision'],
+            trading_pair['quote_asset_precision'],
+            trading_pair['is_spot_trading_allowed'],
+            trading_pair['is_margin_trading_allowed'],
+            json.dumps(trading_pair['filters']),
+            trading_pair['maker_commission'],
+            trading_pair['taker_commission'],
+            trading_pair['max_margin_allowed']
+        )
         try:
-            async with self.pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(query, (
-                        trading_pair['symbol'].lower(),
-                        trading_pair['status'],
-                        trading_pair['base_asset'].lower(),
-                        trading_pair['quote_asset'].lower(),
-                        trading_pair['base_asset_precision'],
-                        trading_pair['quote_asset_precision'],
-                        trading_pair['is_spot_trading_allowed'],
-                        trading_pair['is_margin_trading_allowed'],
-                        json.dumps(trading_pair['filters']),  # Store filters as JSON
-                        trading_pair['maker_commission'],
-                        trading_pair['taker_commission'],
-                        trading_pair['max_margin_allowed']
-                    ))
-                    await conn.commit()
-                    self.logger.info(f"DB Saved/updated trading pair {trading_pair['symbol']}")
+            cursor = await self.execute_transaction(query, params)
+            self.logger.info(f"DB Saved/updated trading pair {trading_pair['symbol']}")
+            return cursor
         except Exception as e:
             self.logger.error(f"DB Failed to save/update trading pair {trading_pair['symbol']}: {e}")
+            #raise  # Re-raise if you want calling code to handle the exception        
 
     async def fetch_trading_pairs(self):
         """Fetch trading pairs from MySQL and return as a dictionary."""
-        if not self.pool:
-            await self.create_pool()
         
         trading_pairs = {}
         query = "SELECT `symbol`, `status`, `base_asset`, `quote_asset`, `base_asset_precision`, `quote_asset_precision`, `is_spot_trading_allowed`, `is_margin_trading_allowed`, `filters`, `maker_commission`, `taker_commission`, `max_margin_allowed` FROM `tbl_trading_pairs`"  # Adjust table name
 
         try:
-            async with self.pool.acquire() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cursor:
-                    await cursor.execute(query)
-                    results = await cursor.fetchall()
-                    for row in results:
-                        #if row['status'].lower() != 'trading':
-                        trading_pairs[row['symbol'].lower()] = {
-                            'base_asset': row['base_asset'].lower(),
-                            'quote_asset': row['quote_asset'].lower()
-                        }
+            results = await self.execute_transaction(query,read_only=True)
+            for row in results:
+                #if row['status'].lower() != 'trading':
+                trading_pairs[row['symbol'].lower()] = {
+                    'base_asset': row['base_asset'].lower(),
+                    'quote_asset': row['quote_asset'].lower()
+                }                    
 
             self.logger.info(f"Fetched {len(trading_pairs)} trading pairs from MySQL.")
         except Exception as e:
@@ -117,20 +180,15 @@ class DBHandler(KafkaBase):
         return trading_pairs
 
     async def load_known_tables(self):
-        """Load all known table names from the database."""
-        if not self.pool:
-            await self.create_pool()
-
+        """Load all known table names from the database."""        
         query = "SHOW TABLES"
-        try:
-            async with self.pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(query)
-                    results = await cursor.fetchall()
-                    self.known_tables = {row[0].lower() for row in results}
+        try:            
+            results = await self.execute_transaction(query,read_only=True)
+            self.known_tables = {list(row.values())[0].lower() for row in results}
             self.logger.info(f"Loaded {len(self.known_tables)} known tables.")
         except Exception as e:
             self.logger.error(f"Failed to load known tables: {e}")
+            raise
 
     async def ensure_table_exists(self, symbol):
         """Ensure table exists for the given symbol."""
@@ -139,16 +197,12 @@ class DBHandler(KafkaBase):
             return True
 
         basetbl = "tbl_binance_base_btc" #if "btc" in symbol.lower() else "tbl_binance_base_usd"
-        
+        query = f"CREATE TABLE IF NOT EXISTS {table_name} LIKE {basetbl}"        
         try:
-            async with self.pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(f"""
-                        CREATE TABLE IF NOT EXISTS {table_name} LIKE {basetbl}
-                    """)
-                    await conn.commit()
-                    self.known_tables.add(table_name)
-                    return True
+            await self.execute_transaction(query)
+            self.logger.info(f"DB Table created {table_name}")
+            self.known_tables.add(table_name)
+            return True
         except Exception as e:
             self.logger.error(f"Failed to create table {table_name}: {e}")
             return False
@@ -186,9 +240,6 @@ class DBHandler(KafkaBase):
         if not batches_to_process:
             return
 
-        if not self.pool:
-            await self.create_pool()
-
         # Create all missing tables first
         missing_tables = [t for t in batches_to_process.keys() if t not in self.known_tables]
         for table in missing_tables:
@@ -197,44 +248,52 @@ class DBHandler(KafkaBase):
 
         logData = None
         # Prepare multi-table insert
-        try:
-            async with self.pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    for table_name, records in batches_to_process.items():
-                        if not records:
-                            continue                        
-                        query = f"""
-                            INSERT INTO {table_name} 
-                            (serverTime, volume, totalVolumeSell, totalVolumeBuy, trades, totalTradesSell, 
-                             totalTradesBuy, open, close, high, low, qusd_price)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """
-                        values = [
-                            (
-                                item['et'], item['qusd'] if item.get('qusd', 0) > 0 else item['q'], item['qs'], item['qb'], item['t'], item['ts'], item['tb'],
-                                item['o'], item['c'], item['h'], item['l'], item.get('qp', 0) if item.get('qp') else 0
-                            ) for item in records
-                        ]
-                        logData = f"{table_name}: {values}"
-                        await cursor.executemany(query, values)
+        for table_name, records in batches_to_process.items():
+            if not records:
+                continue                        
+            query = f"""
+            INSERT INTO {table_name} 
+            (serverTime, volume, totalVolumeSell, totalVolumeBuy, trades, totalTradesSell, 
+                totalTradesBuy, open, close, high, low, qusd_price)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            values = [
+                (
+                    item['et'], 
+                    item['qusd'] if item.get('qusd', 0) > 0 else item['q'], 
+                    item['qs'], 
+                    item['qb'], 
+                    item['t'], 
+                    item['ts'], 
+                    item['tb'], 
+                    item['o'], 
+                    item['c'], 
+                    item['h'], 
+                    item['l'], 
+                    item.get('qp', 0) if item.get('qp') else 0
+                ) 
+                for item in records
+            ]
+            logData = f"{table_name}: {values}"
+            try:
+                affected_rows = await self.execute_transaction_batch(table_name, query, values)
+                #self.logger.info(f"Inserted {affected_rows} rows into {table_name}")            
+            except Exception as e:
+                self.logger.error(f"Batch insert failed: {e} {logData}")
+                self.error_count += 1
+                if self.error_count > self.MAX_ERRORS:
+                    raise RuntimeError("Too many consecutive DB errors")
                     
-                    await conn.commit()
-                    total_inserted = sum(len(batch) for batch in batches_to_process.values())
-                    self.logger.info(f"Inserted {total_inserted} records across {len(batches_to_process)} tables")
-                    
-        except Exception as e:
-            self.logger.error(f"Batch insert failed: {e} {logData}")
-            self.error_count += 1
-            if self.error_count > self.MAX_ERRORS:
-                raise RuntimeError("Too many consecutive DB errors")
-                
-            # Re-add failed batches
-            async with self.batch_lock:
-                for table, records in batches_to_process.items():
-                    self.current_batches[table].extend(records)
-        finally:
-            self.current_batches.clear()
-
+                # Re-add failed batches
+                async with self.batch_lock:
+                    for table, records in batches_to_process.items():
+                        self.current_batches[table].extend(records)
+            finally:
+                self.current_batches.clear()
+        
+        total_inserted = sum(len(batch) for batch in batches_to_process.values())
+        self.logger.info(f"Inserted {total_inserted} records across {len(batches_to_process)} tables")
+        
     async def flush_batches(self):
         """Public flush method that coordinates with other operations"""
         if self.flush_lock.locked():
@@ -258,24 +317,17 @@ class DBHandler(KafkaBase):
 
     async def single_insert(self, table_name, data):
         """Insert single record into database."""
-        if not self.pool:
-            await self.create_pool()
-
         query = f"""
             INSERT INTO {table_name} 
             (serverTime, volume, totalVolumeSell, totalVolumeBuy, trades, totalTradesSell, 
                 totalTradesBuy, open, close, high, low, qusd_price)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        
+        """        
         try:
-            async with self.pool.acquire() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute(query, (
-                        data['et'], data['qusd'] if data.get('qusd', 0) > 0 else data['q'], data['qs'], data['qb'], data['t'], data['ts'], data['tb'],
-                                data['o'], data['c'], data['h'], data['l'], data.get('qp', 0) if data.get('qp') else 0
-                    ))
-                    await conn.commit()
+           values = (data['et'], data['qusd'] if data.get('qusd', 0) > 0 else data['q'], data['qs'], data['qb']
+                     , data['t'], data['ts'], data['tb'], data['o'], data['c'], data['h'], data['l']
+                     , data.get('qp', 0) if data.get('qp') else 0)
+           await self.execute_transaction(query,values)
         except Exception as e:
             self.logger.error(f"Single insert failed for {table_name}: {e}")
             raise
@@ -301,11 +353,32 @@ class DBHandler(KafkaBase):
             except asyncio.CancelledError:
                 pass
 
+    async def _get_connection(self):
+        if not self.pool or self.pool._closed:
+            self.logger.error("Connection pool is closed. Cannot acquire connection.")
+            raise RuntimeError("Connection pool is closed.")
+        conn = await self.pool.acquire()
+        self.logger.debug(
+            f"Acquired connection {id(conn)}. "
+            f"Active: {len(self._active_connections)+1}/{self.pool.maxsize}"
+        )
+        self._active_connections.add(conn)
+        return conn
+        
+    async def _release_connection(self, conn):
+        if conn in self._active_connections:
+            await self.pool.release(conn)
+            self._active_connections.remove(conn)
+
     async def close_pool(self):
         """Cleanup resources"""
-        await self.stop_periodic_flusher()
-        await self.flush_batches()
-        if self.pool:
+        if self.pool and not self.pool._closed:
+            await self.stop_periodic_flusher()
+            await self.flush_batches()
+            for conn in list(self._active_connections):
+                await self._release_connection(conn)
             self.pool.close()
             await self.pool.wait_closed()
             self.logger.info("MySQL connection pool closed.")
+        else:
+            self.logger.warning("Attempted to close an already closed pool.")

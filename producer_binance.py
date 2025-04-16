@@ -145,8 +145,10 @@ class KafkaProducerBinance(KafkaBase):
                 
                 async with websockets.connect(
                     uri,
-                    ping_interval=10,  # Send ping every 20 seconds
-                    ping_timeout=5,   # Wait 10 seconds for a pong response
+                    ping_interval=20,  # Send ping every 20 seconds
+                    ping_timeout=10,   # Wait 10 seconds for pong
+                    close_timeout=5,   # Wait 5 seconds when closing
+                    max_queue=2**20,   # Larger message queue
                 ) as websocket:
                     self.active_connections[connection_id]['status'] = 'connected'
                     self.active_connections[connection_id]['last_activity'] = datetime.datetime.now()

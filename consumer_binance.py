@@ -48,49 +48,43 @@ class KafkaConsumerBinance(KafkaBase):
         self.logger.info(f"Consumer for {symbol} processed successfully.")
 
     async def run(self):
-        
         # Wait for Kafka to be ready
         if not await self.wait_for_kafka():
             self.logger.error("Exiting due to Kafka initialization failure.")
             return
+
         self.consumer = await self.create_kafka_consumer(self.topicTradesRaw, self.group_id)
-        #self.consumerCache = self.create_kafka_consumer(self.cacheTrendaware, "cache-reader")  # ✅ Create it once
-        #self.producer = await self.create_kafka_producer()
-        """Main consumer loop that processes raw trade data in batches."""
-        #await self.producer.start()
-        # ✅ Start cache listener asynchronously
-        #asyncio.create_task(self.cache_listener())
+
         try:
             await self.dbhandler.load_known_tables()
             await self.consumer.start()
-            
-            # Start periodic batch flusher
-            asyncio.create_task(self._periodic_batch_flusher())
-            
-            while True:
-                batch = await self.consumer.getmany(timeout_ms=100, max_records=50)
-                if not batch:
-                    await asyncio.sleep(0.5)  # Increased sleep when no messages
-                    continue
-                # Add small sleep between processing batches
-                await asyncio.sleep(0.05)  # 50ms delay reduces CPU usage
 
-                tasks = []
-                
+            last_flush_time = asyncio.get_event_loop().time()  # Track the last flush time
+
+            while True:
+                batch = await self.consumer.getmany(timeout_ms=200, max_records=100)
+                if not batch:
+                    await asyncio.sleep(0.2)  # Increased sleep when no messages
+                    continue
+
+                # Add small sleep between processing batches
+                await asyncio.sleep(0.01)  # 10ms delay reduces CPU usage
+
                 for tp, messages in batch.items():
                     for message in messages:
                         symbol = message.key.decode('utf-8').lower()
                         trade_data = message.value
-                        
-                        # Process trade and add to batch
-                        tasks.append(
-                            self.dbhandler.add_to_batch(symbol, trade_data)
-                        )
-                        #tasks.append(self.process_trade_data(symbol, trade_data))
-                
-                await asyncio.gather(*tasks, return_exceptions=True)
+                        await self.dbhandler.add_to_batch(symbol, trade_data)
+
+                # Commit Kafka offsets
                 await self.consumer.commit()
-                
+
+                # Flush batches if timeout exceeded
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_flush_time >= self.dbhandler.batch_timeout:
+                    await self.dbhandler.flush_batches()
+                    last_flush_time = current_time
+
         except Exception as e:
             self.logger.error(f"Consumer error: {e}")
         finally:
@@ -123,8 +117,9 @@ class KafkaConsumerBinance(KafkaBase):
         finally:
             await self.consumerCache.stop()
 
-"""
+    """
     def SetTrendAware(symbol, trade):
+
         global cacheKeyCandleInsert, awareShort, avgLimit
         try:
             thisTrade = None
@@ -302,28 +297,5 @@ class KafkaConsumerBinance(KafkaBase):
                 pts = 12
             else:
                 pts = 13
-        return pts
-
-    async def get_matching_topics(self):
-        "" "Fetch all topics from Kafka matching the pattern 'binance.*'." ""
-        while True:
-            try:
-                # Use KafkaAdminClient to list topics
-                admin_client = KafkaAdminClient(bootstrap_servers=self.kafka_config['bootstrap_servers'])
-                all_topics = admin_client.list_topics()
-                admin_client.close()
-                self.logger.info(f"Fetched topics from Kafka: {all_topics}")
-
-                # Filter topics matching the pattern 'binance.*'
-                matching_topics = [topic for topic in all_topics if topic.startswith("binance.")]
-                if matching_topics:
-                    self.logger.info(f"Subscribing to topics: {matching_topics}")
-                    return matching_topics
-                else:
-                    self.logger.info("No matching topics found. Waiting for Producer to create topics...")
-                    await asyncio.sleep(10)  # Wait for 10 seconds before retrying
-            except KafkaError as e:
-                self.logger.error(f"Failed to fetch topics from Kafka: {e}")
-                await asyncio.sleep(10)  # Wait before retrying"
-                ""
-"""
+        return pts"
+    """

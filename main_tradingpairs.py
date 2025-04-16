@@ -2,28 +2,7 @@ import asyncio
 import signal
 import os
 import sys
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 from tradingpairs_binance import TradingPairsFetcher
-
-class CodeReloader(FileSystemEventHandler):
-    def on_modified(self, event):
-        if event.src_path.endswith(".py"):
-            print(f"Detected change in {event.src_path}, restarting...")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-
-async def watch_files():
-    observer = Observer()
-    event_handler = CodeReloader()
-    observer.schedule(event_handler, path=".", recursive=True)
-    observer.start()
-    
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        observer.stop()
-        observer.join()
 
 async def run_tradingpairsfetcher():
     producerTP = TradingPairsFetcher()
@@ -46,8 +25,7 @@ async def periodic_task(interval, stop_event):
         await run_tradingpairsfetcher()  # Run again
 
 async def main():    
-    # watchdog_task = asyncio.create_task(watch_files())
-     # Start TradingPairsFetcher every hour (3600 seconds)
+    # Start TradingPairsFetcher every hour (3600 seconds)
     stop_event = asyncio.Event()
     taskT = asyncio.create_task(periodic_task(3600, stop_event))
     all_tasks = [taskT]

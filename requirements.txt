@@ -1,3 +1,4 @@
+cryptography==3.4.7  # Add this line
 aiokafka
 aiohttp
 websockets

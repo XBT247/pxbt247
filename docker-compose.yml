@@ -47,7 +47,7 @@ services:
   producer:
     build:
       context: .
-      dockerfile: Dockerfile.binance.consumer
+      dockerfile: Dockerfile.binance.producer
     container_name: producer
     command: python main_producer.py
     environment:
