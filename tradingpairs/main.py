@@ -1,8 +1,8 @@
+import logging
+logging.basicConfig(level=logging.INFO)  # Safety net
 import asyncio
 import signal
-import os
-import sys
-from tradingpairs_binance import TradingPairsFetcher
+from tradingpairs.tradingpairs_binance import TradingPairsFetcher
 
 async def run_tradingpairsfetcher():
     producerTP = TradingPairsFetcher()

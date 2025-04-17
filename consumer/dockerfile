@@ -11,9 +11,10 @@ RUN apt-get update && \
 
 # 2. Install Python packages
 WORKDIR /app
-COPY requirements.txt .
+ENV PYTHONPATH="/app"
+COPY ../requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. Copy app and run
 COPY . .
-CMD ["python", "main_consumer.py"]
+CMD ["python", "consumer/main.py"]

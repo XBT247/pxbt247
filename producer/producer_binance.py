@@ -6,9 +6,9 @@ import datetime
 from collections import defaultdict
 from aiokafka import AIOKafkaProducer
 import websockets
-from base_binance import KafkaBase
 from aiokafka.errors import KafkaError
-from dbhandler import DBHandler
+from core.base_binance import KafkaBase
+from infra.db.dbhandler import DBHandler
 
 class KafkaProducerBinance(KafkaBase):
     def __init__(self):

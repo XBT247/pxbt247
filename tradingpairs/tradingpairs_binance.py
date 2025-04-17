@@ -5,12 +5,14 @@ import aiohttp
 import hmac
 import hashlib
 import urllib.parse
-from base_binance import KafkaBase
-from dbhandler import DBHandler
+from core.base_binance import KafkaBase
+from infra.db.dbhandler import DBHandler
+
 
 class TradingPairsFetcher(KafkaBase):
     def __init__(self):
         super().__init__()
+        self.logger.info("TradingPairsFetcher initialized!") 
         self.producerTP = None  # Kafka producer instance
         self.dbhandler = DBHandler(self.config_db)  # Initialize DB handler
 

@@ -3,7 +3,7 @@ import json
 import aiomysql
 import asyncio
 from asyncio import Lock
-from base_binance import KafkaBase
+from core.base_binance import KafkaBase
 
 class DBHandler(KafkaBase):
     def __init__(self, db_config):

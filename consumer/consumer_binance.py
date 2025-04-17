@@ -2,9 +2,8 @@ from collections import OrderedDict
 import json
 import asyncio
 from aiokafka.errors import KafkaError
-from base_binance import KafkaBase
-from dbhandler import DBHandler
-from trend_aware import TrendAware
+from core.base_binance import KafkaBase
+from infra.db.dbhandler import DBHandler
 
 class KafkaConsumerBinance(KafkaBase):
     def __init__(self, consumer_id, group_id="cgRawTrades"):

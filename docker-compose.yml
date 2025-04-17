@@ -35,21 +35,20 @@ services:
   tradingpairs:
     build:
       context: .
-      dockerfile: Dockerfile.binance.fetchpairs
-    command: python main_tradingpairs.py
+      dockerfile: tradingpairs/dockerfile
     container_name: tradingpairs    
     environment:
-      MYSQL_HOST: 172.17.0.1
-      MYSQL_PORT: 3306      
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MYSQL_HOST: host.docker.internal
+      MYSQL_PORT: 3306
     networks:
       - kafka-net
 
   producer:
     build:
       context: .
-      dockerfile: Dockerfile.binance.producer
+      dockerfile: producer/dockerfile
     container_name: producer
-    command: python main_producer.py
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       MYSQL_HOST: host.docker.internal
@@ -62,7 +61,7 @@ services:
   consumer:
     build:
       context: .
-      dockerfile: Dockerfile.binance.consumer
+      dockerfile: consumer/dockerfile
     container_name: consumer
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092

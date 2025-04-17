@@ -5,17 +5,14 @@ import asyncio
 from aiokafka.errors import KafkaError
 from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 
-# Configure the logger once
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+logger = logging.getLogger(__name__)  # Will be 'core.base_binance'
+logger.propagate = True  # Ensure messages propagate to root
 
 class KafkaBase:
     def __init__(self):
-        with open("config_binance.json") as config_file:
+         # Create child logger (will be 'core.base_binance.KafkaBase')
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        with open("core/config_binance.json") as config_file:
             self.config = json.load(config_file)
         self.awareShort = 25
         self.awareMed = 45

@@ -1,7 +1,7 @@
 import asyncio
 import signal
 from producer_binance import KafkaProducerBinance
-from tradingpairs_binance import TradingPairsFetcher
+from tradingpairs.tradingpairs_binance import TradingPairsFetcher
 
 async def run_producer(producer):
     try:
