@@ -6,15 +6,15 @@ import hmac
 import hashlib
 import urllib.parse
 from core.base_binance import KafkaBase
-from infra.db.dbhandler import DBHandler
-
+from infrastructure.db.repositories.tradingpairs_repository import TradingPairsRepository
 
 class TradingPairsFetcher(KafkaBase):
     def __init__(self):
         super().__init__()
         self.logger.info("TradingPairsFetcher initialized!") 
         self.producerTP = None  # Kafka producer instance
-        self.dbhandler = DBHandler(self.config_db)  # Initialize DB handler
+        self.repo = TradingPairsRepository(self.config_db)
+        self.repo.logger = self.logger  # Inject your logger
 
     async def fetch_trading_pairs(self):
         """Fetch trading pairs from Binance and store crucial fields in the database."""
@@ -86,7 +86,7 @@ class TradingPairsFetcher(KafkaBase):
                             await self.publish_to_kafka_cache(trading_pair)
 
                             # Save trading pair information to the database
-                            await self.dbhandler.save_trading_pair(trading_pair)
+                            await self.repo.save_trading_pair(trading_pair)
 
                     self.logger.info(f"Distinct quote currencies: {self.quote_currencies}")
                 """
@@ -225,7 +225,6 @@ class TradingPairsFetcher(KafkaBase):
 
     async def run(self):
         """Main method to run the trading pairs fetcher."""
-        await self.dbhandler.create_pool()  # Create database connection pool
         
         # Wait for Kafka to be ready
         if not await self.wait_for_kafka():

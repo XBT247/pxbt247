@@ -8,7 +8,7 @@ from aiokafka import AIOKafkaProducer
 import websockets
 from aiokafka.errors import KafkaError
 from core.base_binance import KafkaBase
-from infra.db.dbhandler import DBHandler
+from infrastructure.db.dbhandler import DBHandler
 
 class KafkaProducerBinance(KafkaBase):
     def __init__(self):
