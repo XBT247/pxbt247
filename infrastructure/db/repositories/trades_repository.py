@@ -10,12 +10,13 @@ from infrastructure.db.interfaces.itrade_repository import ITradesRepository
 class TradesRepository(BaseRepository, ITradesRepository):
     """MySQL implementation of trade data repository"""
     
-    def __init__(self, db_config: Dict[str, Any]):
+    def __init__(self, db_config: Dict[str, Any], exchange: str):
         super().__init__(db_config)
         self._batches = defaultdict(list)
         self._periodic_flusher_task = None
         self._batch_timeout = db_config.get('batch_timeout', 5.0)  # Default 5 seconds
         self.known_tables = set()
+        self.exchange = exchange # e.g., 'binance'
         
     @property
     def batch_timeout(self) -> float:

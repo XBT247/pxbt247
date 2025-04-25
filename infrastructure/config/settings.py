@@ -31,15 +31,16 @@ def load_config(exchange: str) -> Dict[str, Any]:
     return ConfigLoader.load(exchange)
 
 class ExchangeConfig:
-    def __init__(self, exchange_name: str):
-        self.exchange = exchange_name
-        with open(f"config/{exchange_name}.json") as f:
-            self.config = json.load(f)
+    def __init__(self, exchange_name: str, config_data: dict):
+        self.exchange_name = exchange_name
+        self.config = config_data
+        
+    def get_url(self, endpoint: str) -> str:
+        return self.config['urls'].get(endpoint)
+        
+    def get_topic(self, topic_type: str) -> str:
+        return self.config['topics'].get(topic_type)
         
     @property
-    def kafka_config(self):
-        return {
-            'bootstrap_servers': self.config['kafka']['bootstrap_servers'],
-            'raw_topic': f"{self.exchange}.trades.raw",
-            'cache_topic': f"cache.{self.exchange}.trendaware"
-        }
+    def kafka_bootstrap_servers(self) -> str:
+        return self.config['kafka']['bootstrap_servers']

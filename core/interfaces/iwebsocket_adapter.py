@@ -8,7 +8,7 @@ class IWebSocketAdapter(ABC):
         pass
         
     @abstractmethod
-    async def disconnect(self):
+    async def shutdown(self):
         pass
         
     @abstractmethod

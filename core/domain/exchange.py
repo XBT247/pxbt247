@@ -5,6 +5,10 @@ from typing import Dict, Any
 class ExchangeConfig:
     exchange_name: str
     config_data: Dict[str, Any]
+
+    def get(self, key: str, default=None) -> Any:
+        """Generic config value getter with default fallback"""
+        return self.config_data.get(key, default)
     
     @property
     def kafka_bootstrap_servers(self) -> str:

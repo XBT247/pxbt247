@@ -1,7 +1,8 @@
 # cache_repository.py
 from collections import OrderedDict
 from core.domain.trade import CachedTradeData
-from infrastructure.db.interfaces.itrade_repository import ICacheRepository
+from infrastructure.db.interfaces.icache_repository import ICacheRepository
+
 #from core.interfaces.repositories import ICacheRepository
 
 class CacheRepository(ICacheRepository):

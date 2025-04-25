@@ -4,10 +4,13 @@ from core.domain.trade import RawTrade, AggregatedTrade
 from core.interfaces.iproducer import ITradeProducer
 
 class KafkaProducerClient(ITradeProducer):
-    def __init__(self, bootstrap_servers: str, raw_topic: str, agg_topic: str):
-        self.producer = AIOKafkaProducer(
+    def __init__(self, bootstrap_servers: str, raw_topic: str, agg_topic: str, **kwargs):
+        self.producer = AIOKafkaProducer(            
             bootstrap_servers=bootstrap_servers,
-            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            linger_ms=kwargs.get('linger_ms', 100),
+            #batch_size=kwargs.get('batch_size', 16384),
+            max_request_size=kwargs.get('max_request_size', 1048576)
         )
         self.raw_topic = raw_topic
         self.agg_topic = agg_topic

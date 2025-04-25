@@ -22,3 +22,4 @@ class IMessageProducer(ABC):
     @abstractmethod
     async def stop(self):
         pass
+    

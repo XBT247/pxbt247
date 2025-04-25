@@ -30,14 +30,14 @@ class ITradesRepository(ABC):
     async def start_periodic_flusher(self) -> None:
         """Start background task for periodic batch flushing"""
         pass
-    
-    @abstractmethod
-    async def close_pool(self) -> None:
-        """Close database connection pool"""
-        pass
-    
+        
     @property
     @abstractmethod
     def batch_timeout(self) -> float:
         """Timeout period for batch flushing in seconds"""
+        pass
+
+    @abstractmethod
+    async def close(self) -> None:
+        """Release any repository resources"""
         pass

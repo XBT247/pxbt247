@@ -13,3 +13,7 @@ class ITradeProducer(ABC):
     @abstractmethod
     async def produce_aggregated(self, trade: AggregatedTrade):
         pass
+    
+    @abstractmethod
+    async def stop(self):
+        pass

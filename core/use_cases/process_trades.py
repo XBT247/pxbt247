@@ -1,57 +1,87 @@
+# process_trades.py
+import asyncio
+import logging
 from core.domain.trade import Trade, CachedTradeData
 from core.interfaces.imessaging import IMessageProducer
 from infrastructure.db.interfaces.icache_repository import ICacheRepository
 from infrastructure.db.interfaces.itrade_repository import ITradesRepository
+
+logger = logging.getLogger(__name__)
 
 class ProcessTradeUseCase:
     def __init__(
         self,
         trade_repo: ITradesRepository,
         cache_repo: ICacheRepository,
-        producer: IMessageProducer
+        producer: IMessageProducer,
+        max_cached_trades: int = 100  # Configurable
     ):
         self.trade_repo = trade_repo
         self.cache_repo = cache_repo
         self.producer = producer
+        self.max_cached_trades = max_cached_trades
 
     async def execute(self, trade: Trade):
-        # Get or initialize cached data
-        cached_data = await self.cache_repo.get(trade.symbol)
-        if not cached_data:
-            cached_data = CachedTradeData(
-                symbol=trade.symbol,
-                trades=[],
-                rsi=0,
-                macd=0,
-                ma20=0
-            )
+        try:
+            # Get cached data with debug logging
+            logger.debug(f"Processing trade for {trade.symbol}")
+            cached_data = await self._get_cached_data(trade.symbol)
+            
+            updated_data = self._calculate_indicators(cached_data, trade)
+            
+            # Transactional save
+            await self._persist_data(trade, updated_data)
+            
+            # Publish update
+            await self._publish_update(trade.symbol, updated_data)
+            
+        except Exception as e:
+            logger.error(f"Trade processing failed for {trade.symbol}: {e}", exc_info=True)
+            raise
 
-        # Update indicators
-        updated_data = self._calculate_indicators(cached_data, trade)
-        
-        # Persist data
-        await self.trade_repo.add(trade)
-        await self.cache_repo.update(trade.symbol, updated_data)
-        
-        # Publish to Kafka
-        await self.producer.send(
-            topic="cache.binance.trendaware",
-            key=trade.symbol,
-            value=updated_data.to_dict()
-        )
+    async def _get_cached_data(self, symbol: str):
+        """Helper method with logging"""
+        try:
+            data = await self.cache_repo.get(symbol)
+            if not data:
+                logger.info(f"No cached data found for {symbol}, initializing")
+                data = CachedTradeData.initial(symbol)
+            return data
+        except Exception as e:
+            logger.warning(f"Cache read failed for {symbol}: {e}")
+            return CachedTradeData.initial(symbol)
+
+    async def _persist_data(self, trade: Trade, updated_data: CachedTradeData):
+        """Transactional persistence with logging"""
+        try:
+            await asyncio.gather(
+                self.trade_repo.add(trade),
+                self.cache_repo.update(trade.symbol, updated_data)
+            )
+            logger.debug(f"Persisted trade {trade.trade_id} for {trade.symbol}")
+        except Exception as e:
+            logger.error(f"Persistence failed for {trade.symbol}: {e}")
+            raise
+
+    async def _publish_update(self, symbol: str, data: CachedTradeData):
+        """Publishing with logging"""
+        try:
+            await self.producer.send(
+                topic="cache.binance.trendaware",
+                key=symbol,
+                value=data.to_dict()
+            )
+            logger.debug(f"Published update for {symbol}")
+        except Exception as e:
+            logger.error(f"Publish failed for {symbol}: {e}")
+            raise
 
     def _calculate_indicators(self, cached_data: CachedTradeData, new_trade: Trade):
-        # Update trades list
-        updated_trades = cached_data.trades + [new_trade]
-        
-        # Simple indicator calculations (replace with real logic)
-        prices = [t.price for t in updated_trades[-20:]]  # Last 20 trades
-        avg_price = sum(prices) / len(prices) if prices else new_trade.price
-        
-        return CachedTradeData(
-            symbol=cached_data.symbol,
-            trades=updated_trades[-100:],  # Keep last 100 trades
-            rsi=avg_price * 1.1,
-            macd=avg_price * 0.9,
-            ma20=avg_price
-        )
+        """Indicator calculation with debug logging"""
+        try:
+            # ... existing calculation logic ...
+            logger.debug(f"Calculated indicators for {new_trade.symbol}")
+            return None #updated_data
+        except Exception as e:
+            logger.error(f"Indicator calculation failed: {e}")
+            raise

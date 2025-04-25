@@ -8,7 +8,7 @@ async def main():
     await container.initialize()
     
     try:
-        await container.producer_service.run()
+        await container.producer_service.run() 
     finally:
         await container.shutdown()
 

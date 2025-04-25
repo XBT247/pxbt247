@@ -66,3 +66,8 @@ class BaseRepository:
         finally:
             if conn:
                 await self.pool.release_connection(conn)
+
+    async def close(self) -> None:
+        """Clean up repository resources"""
+        if hasattr(self, 'pool'):
+            await self.pool.close()

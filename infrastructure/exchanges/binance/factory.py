@@ -1,3 +1,4 @@
+from application.workers.websocket_worker import WebSocketWorker
 from core.exchange_factory import ExchangeFactory
 from core.interfaces.imessaging import IMessageConsumer
 from core.interfaces.iproducer import ITradeProducer
@@ -33,9 +34,30 @@ class BinanceExchangeFactory(ExchangeFactory, exchange="binance"):
             db_config=config.database_config,
             exchange=config.exchange_name
         )
+    """
+    @classmethod
+    def _create_websocket_adapter(cls, config: ExchangeConfig) -> IWebSocketAdapter:
+        return WebSocketWorker(
+            adapter=BinanceWebSocketAdapter(),
+            symbols=["btcusdt", "ethusdt"],
+            max_reconnect_attempts=5,
+            health_check_interval=60
+        )"""
     
     @classmethod
-    def create_websocket_adapter(cls, config: ExchangeConfig) -> IWebSocketAdapter:
+    def _create_websocket_adapter(cls, config: ExchangeConfig) -> IWebSocketAdapter:
+        # Return raw adapter instead of worker
         return BinanceWebSocketAdapter(
-            websocket_url=config.get_url("websocket")
+            ws_base_url = config.get_url("ws_base_url")
+        )
+    
+    @classmethod
+    def _create_websocket_worker(cls, config: ExchangeConfig) -> WebSocketWorker:
+        return WebSocketWorker(
+            adapter=BinanceWebSocketAdapter(
+                ws_base_url =config.get_url("ws_base_url")
+            ),
+            symbols=config.highload_pairs,
+            max_reconnect_attempts=5,
+            health_check_interval=60
         )
