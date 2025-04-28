@@ -24,6 +24,13 @@ class Logger:
                         'stream': 'ext://sys.stdout'
                     }
                 },
+                'loggers': {
+                    'aiokafka': {  # Add Kafka logging
+                        'level': 'DEBUG',
+                        'handlers': ['default'],
+                        'propagate': False
+                    }
+                },
                 'root': {
                     'handlers': ['default'],
                     'level': 'INFO'

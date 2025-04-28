@@ -3,6 +3,8 @@ import asyncio
 import json
 from typing import Dict, List, Any, Optional
 from collections import OrderedDict, defaultdict
+from core import logging
+from core.domain.trade import RawTrade
 from infrastructure.db.BaseRepository import BaseRepository
 from infrastructure.db.DBError import RepositoryError
 from infrastructure.db.interfaces.itrade_repository import ITradesRepository
@@ -10,13 +12,14 @@ from infrastructure.db.interfaces.itrade_repository import ITradesRepository
 class TradesRepository(BaseRepository, ITradesRepository):
     """MySQL implementation of trade data repository"""
     
-    def __init__(self, db_config: Dict[str, Any], exchange: str):
+    def __init__(self, db_config: Dict[str, Any], exchange: str, logger: logging.Logger = None):
         super().__init__(db_config)
         self._batches = defaultdict(list)
         self._periodic_flusher_task = None
         self._batch_timeout = db_config.get('batch_timeout', 5.0)  # Default 5 seconds
         self.known_tables = set()
         self.exchange = exchange # e.g., 'binance'
+        self.logger = logger
         
     @property
     def batch_timeout(self) -> float:
@@ -125,3 +128,31 @@ class TradesRepository(BaseRepository, ITradesRepository):
     def _get_table_name(self, symbol: str) -> str:
         """Generate normalized table name"""
         return f"tbl_binance_{symbol.replace('.', '_').lower()}"
+
+    async def add(self, trade: RawTrade) -> None:
+        """Add a single trade to the repository."""
+        table_name = self._get_table_name(trade.symbol)
+        # if table_name not in self.known_tables:
+        #     await self._ensure_table_exists(trade.symbol)
+        #     self.known_tables.add(table_name)
+
+        # query = f"""
+        #     INSERT INTO {table_name} (
+        #         timestamp, price, quantity, is_buyer_maker,
+        #         trade_id, quote_quantity
+        #     ) VALUES (%s, %s, %s, %s, %s, %s)
+        # """
+        # params = (
+        #     trade.timestamp,
+        #     trade.price,
+        #     trade.quantity,
+        #     trade.is_buyer_maker,
+        #     trade.trade_id,
+        #     trade.quote_quantity
+        # )
+        try:
+            # await self._execute(query, params)
+            pass  # Disabled MySQL insertion
+        except Exception as e:
+            self.logger.error(f"Failed to add trade to {table_name}: {e}")
+            raise

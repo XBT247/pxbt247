@@ -24,43 +24,51 @@ class Container:
         self.logger = Logger.get_logger(f"container.{exchange}")
         # Initialize all attributes to None
         self.producer = None
-        self.ws_adapter = None
+        self.ws_worker = None
         self.consumer = None
-        self.repository = None
+        self.repository_trades = None
+        self.repository_tradingpairs = None
         self.producer_service = None
         self.consumer_service = None
         
     async def initialize(self):
         try:
             # Initialize producer components
-            self.producer = ExchangeFactory.create_producer(self.exchange, self.config)
-            self.ws_worker = ExchangeFactory.create_websocket_worker(
-                self.exchange,
-                self.config
-            )            
+            self.producer = ExchangeFactory.create_producer(self.exchange, self.config, logger=self.logger)
+                     
             # Initialize consumer components
             self.consumer = ExchangeFactory.create_consumer(self.exchange, self.config)
-            self.repository = ExchangeFactory.create_repository(self.exchange, self.config)
+            self.repository_trades = ExchangeFactory.create_repository_trades(self.exchange, self.config, logger=self.logger)
+            self.repository_tradingpairs = ExchangeFactory.create_repository_tradingpairs(self.exchange, self.config, logger=self.logger)
 
             cache_repo = CacheRepository()  # Or your actual cache implementation
-            trend_producer = ExchangeFactory.create_producer(self.exchange, self.config) #topic="cache.trendaware"
+            trend_producer = ExchangeFactory.create_producer(self.exchange, self.config, logger=self.logger) #topic="cache.trendaware"
             
+            # Fetch trading pairs and combine with config.highload_pairs
+            fetched_pairs = await self.repository_tradingpairs.fetch_trading_pairs()
+            combined_pairs = self.config.highload_pairs + list(fetched_pairs.keys())
+            self.ws_worker = ExchangeFactory.create_websocket_worker(
+                self.exchange,
+                self.config,
+                combined_pairs,
+                logger=self.logger
+            )   
             # Initialize services
-            #from application.services import TradeProducerService, TradeConsumerService
             self.producer_service = TradeProducerService(
                 use_case=ProduceTradesUseCase(
                     producer=self.producer,
-                    repository=self.repository ,
+                    repository=self.repository_trades ,
                     aggregation_window=5  # Optional: default is 5 seconds
                 ),
                 ws_worker=self.ws_worker,
-                symbols=self.config.highload_pairs # Get symbols from config
+                symbols=combined_pairs 
             )
+            
             self.consumer_service = TradeConsumerService(
                 consumer=self.consumer,
                 controller=TradeMessageController(
                     use_case=ProcessTradeUseCase(
-                        trade_repo=self.repository,
+                        trade_repo=self.repository_trades,
                         cache_repo=cache_repo,
                         producer=trend_producer
                     )
@@ -74,17 +82,20 @@ class Container:
             raise
     
     async def shutdown(self):
-        shutdown_tasks = []        
+        shutdown_tasks = []
         # Standard components
         if hasattr(self, 'producer') and self.producer:
             shutdown_tasks.append(self.producer.stop())
-        if hasattr(self, 'ws_adapter') and self.ws_adapter:
-            shutdown_tasks.append(self.ws_adapter.shutdown())
+        if hasattr(self, 'ws_worker') and self.ws_worker:
+            shutdown_tasks.append(self.ws_worker.shutdown())
         if hasattr(self, 'consumer') and self.consumer:
-            shutdown_tasks.append(self.consumer.stop())        
+            shutdown_tasks.append(self.consumer.stop())
         # Repository cleanup
-        if hasattr(self, 'repository') and self.repository and hasattr(self.repository, 'close'):
-            shutdown_tasks.append(self.repository.close())
-        
-        await asyncio.gather(*shutdown_tasks)
+        if hasattr(self, 'repository_trades') and self.repository_trades and hasattr(self.repository_trades, 'close'):
+            shutdown_tasks.append(self.repository_trades.close())
+
+        try:
+            await asyncio.gather(*shutdown_tasks, return_exceptions=True)
+        except Exception as e:
+            self.logger.error(f"Error during shutdown: {e}")
 

@@ -35,4 +35,4 @@ class ProducerContainer:
     
     async def shutdown(self):
         await self.producer.stop()
-        await self.ws_adapter.disconnect()
+        await self.ws_adapter.shutdown()

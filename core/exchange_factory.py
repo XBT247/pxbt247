@@ -1,11 +1,13 @@
-from typing import Dict, Type
+from typing import Dict, Type, List
 import uuid
 from application.workers.websocket_worker import WebSocketWorker
+from core import logging
 from core.domain.exchange import ExchangeConfig
 from core.interfaces.imessaging import IMessageConsumer
 from core.interfaces.iproducer import ITradeProducer
 from core.interfaces.iwebsocket_adapter import IWebSocketAdapter
 from infrastructure.db.interfaces.itrade_repository import ITradesRepository
+from infrastructure.db.interfaces.itradingpairs_repository import ITradingPairsRepository
 from infrastructure.exchanges.binance.adapter import BinanceWebSocketAdapter
 from infrastructure.messaging.kafka_consumer import KafkaConsumerClient
 from infrastructure.messaging.kafka_producer import KafkaProducerClient
@@ -38,7 +40,7 @@ class ExchangeFactory:
             await consumer.stop()
 
     @classmethod
-    def create_producer(self, exchange: str, config: ExchangeConfig) -> ITradeProducer:
+    def create_producer(self, exchange: str, config: ExchangeConfig, logger: logging.Logger = None) -> ITradeProducer:
         factory = self._registry.get(exchange)
         if not factory:
             raise ValueError(f"No factory registered for exchange: {exchange}")
@@ -52,18 +54,26 @@ class ExchangeFactory:
         return factory._create_consumer(config)
     
     @classmethod
-    def create_repository(self, exchange: str, config: ExchangeConfig) -> ITradesRepository:
+    def create_repository_trades(self, exchange: str, config: ExchangeConfig, logger: logging.Logger = None) -> ITradesRepository:
         factory = self._registry.get(exchange)
         if not factory:
             raise ValueError(f"No factory registered for exchange: {exchange}")
-        return factory._create_repository(config)
+        return factory._create_repository_trades(config, logger)
+    
+    
+    @classmethod
+    def create_repository_tradingpairs(self, exchange: str, config: ExchangeConfig, logger: logging.Logger = None) -> ITradingPairsRepository:
+        factory = self._registry.get(exchange)
+        if not factory:
+            raise ValueError(f"No factory registered for exchange: {exchange}")
+        return factory._create_repository_tradingpairs(config, logger)
         
     @classmethod
-    def create_websocket_worker(cls, exchange: str, config: ExchangeConfig) -> WebSocketWorker:
+    def create_websocket_worker(cls, exchange: str, config: ExchangeConfig, symbols: List[str] = None, logger: logging.Logger = None) -> WebSocketWorker:
         factory = cls._registry.get(exchange)
         if not factory:
             raise ValueError(f"No factory registered for exchange: {exchange}")
-        return factory._create_websocket_worker(config)
+        return factory._create_websocket_worker(config, symbols, logger)
     
     @classmethod
     def _create_producer(self, config: ExchangeConfig) -> ITradeProducer:
@@ -100,14 +110,17 @@ class ExchangeFactory:
             raise
         
     @classmethod
-    def _create_repository(self, config: ExchangeConfig) -> ITradesRepository:
+    def _create_repository_trades(self, config: ExchangeConfig) -> ITradesRepository:
+        raise NotImplementedError
+    
+     
+    @classmethod
+    def _create_repository_tradingpairs(self, config: ExchangeConfig) -> ITradingPairsRepository:
         raise NotImplementedError
     
     @classmethod
     def _create_websocket_adapter(self, config: ExchangeConfig) -> IWebSocketAdapter:
-        return WebSocketWorker(
-            adapter=BinanceWebSocketAdapter(),
-            symbols=["btcusdt", "ethusdt"],
-            max_reconnect_attempts=5,
-            health_check_interval=60
+        return BinanceWebSocketAdapter(
+            ws_base_url=config.get_url("ws_base_url"),
+            logger=Logger.get_logger("BinanceWebSocketAdapter")
         )
