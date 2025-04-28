@@ -35,14 +35,14 @@ class Container:
         try:
             # Initialize producer components
             self.producer = ExchangeFactory.create_producer(self.exchange, self.config, logger=self.logger)
-                     
+            await self.producer.initialize()
             # Initialize consumer components
             self.consumer = ExchangeFactory.create_consumer(self.exchange, self.config)
             self.repository_trades = ExchangeFactory.create_repository_trades(self.exchange, self.config, logger=self.logger)
             self.repository_tradingpairs = ExchangeFactory.create_repository_tradingpairs(self.exchange, self.config, logger=self.logger)
 
-            cache_repo = CacheRepository()  # Or your actual cache implementation
-            trend_producer = ExchangeFactory.create_producer(self.exchange, self.config, logger=self.logger) #topic="cache.trendaware"
+            #cache_repo = CacheRepository()  # Or your actual cache implementation
+            #trend_producer = ExchangeFactory.create_producer(self.exchange, self.config, logger=self.logger) #topic="cache.trendaware"
             
             # Fetch trading pairs and combine with config.highload_pairs
             fetched_pairs = await self.repository_tradingpairs.fetch_trading_pairs()
@@ -63,7 +63,7 @@ class Container:
                 ws_worker=self.ws_worker,
                 symbols=combined_pairs 
             )
-            
+            """
             self.consumer_service = TradeConsumerService(
                 consumer=self.consumer,
                 controller=TradeMessageController(
@@ -75,7 +75,7 @@ class Container:
                 ),
                 batch_size=self.config.get('batch_size', 100),
                 batch_timeout=self.config.get('batch_timeout', 5.0)
-            )
+            )"""
         except Exception as e:
             self.logger.error(f"Container Initialization failed: {e}")
             await self.shutdown()

@@ -22,11 +22,12 @@ class KafkaProducerClient(ITradeProducer):
     async def check_kafka_readiness(self):
         """Check if Kafka server is running and the topic exists."""
         try:
-            metadata = await self.producer.client._client.fetch_all_metadata()
-            if self.raw_topic not in metadata.topics:
+            # Fetch the list of topics from the producer
+            topics = await self.producer.topics()
+            if self.raw_topic not in topics:
                 self.logger.error(f"Kafka topic '{self.raw_topic}' does not exist.")
                 raise RuntimeError(f"Kafka topic '{self.raw_topic}' does not exist.")
-            if self.agg_topic not in metadata.topics:
+            if self.agg_topic not in topics:
                 self.logger.error(f"Kafka topic '{self.agg_topic}' does not exist.")
                 raise RuntimeError(f"Kafka topic '{self.agg_topic}' does not exist.")
             self.logger.info("Kafka server is running and topics are available.")
@@ -38,7 +39,7 @@ class KafkaProducerClient(ITradeProducer):
         try:
             self.logger.info("Initializing Kafka producer...")
             await self.producer.start()
-            await self.check_kafka_readiness()  # Ensure Kafka readiness
+            #await self.check_kafka_readiness()  # Ensure Kafka readiness
             self.logger.info("Kafka producer initialized successfully")
         except Exception as e:
             self.logger.error(f"Failed to initialize Kafka producer: {e}")
