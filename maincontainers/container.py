@@ -5,8 +5,8 @@ from typing import Dict
 from application.controllers.trade_controller import TradeMessageController
 from core.exchange_factory import ExchangeFactory
 from core.domain.exchange import ExchangeConfig
-from core.use_cases.process_trades import ProcessTradeUseCase
-from core.use_cases.produce_trades import ProduceTradesUseCase
+from core.use_cases.uc_process_trades import ProcessTradeUseCase
+from core.use_cases.uc_produce_trades import ProduceTradesUseCase
 from infrastructure.config.settings import load_config
 from infrastructure.db.repositories.cache_repository import CacheRepository
 from infrastructure.exchanges.binance.factory import BinanceExchangeFactory

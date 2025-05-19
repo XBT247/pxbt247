@@ -3,11 +3,18 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 from collections import OrderedDict
 
+from infrastructure.db.models.trade_db_model import TradeDBModel
+
 class ITradesRepository(ABC):
     """Interface for trade data operations used by KafkaConsumerBinance"""
     
     @abstractmethod
     async def load_known_tables(self) -> None:
+        """Load known trading pair tables into memory"""
+        pass
+
+    @abstractmethod
+    async def fetch_trades_history(self, symbol: str, lookback_days: int = 30, total_records: int = 0, order_asc: bool = True) -> List[TradeDBModel]:
         """Load known trading pair tables into memory"""
         pass
     

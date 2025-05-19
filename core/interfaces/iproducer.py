@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from core.domain.trade import RawTrade, AggregatedTrade
+from core.domain.entities.trading_pair import TradingPair
 
 class ITradeProducer(ABC):
     @abstractmethod
@@ -12,6 +13,11 @@ class ITradeProducer(ABC):
         
     @abstractmethod
     async def produce_aggregated(self, trade: AggregatedTrade):
+        pass
+
+    @abstractmethod
+    async def publish_trading_pair(self, trading_pair: TradingPair) -> bool:
+        """Publish trading pair to message bus"""
         pass
     
     @abstractmethod

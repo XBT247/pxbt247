@@ -2,6 +2,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Any
 
+
+@dataclass
+class TradeDb:
+    exchange: str
+    symbol: str
+    price: float
+    quantity: float
+    timestamp: datetime
+    is_buyer_maker: bool
+    trade_id: str = None
+    quote_quantity: float = None
+
+    def get_table_name(self) -> str:
+        return f"tbl_{self.exchange}_{self.symbol.replace('.', '_').lower()}"
+    
 @dataclass
 class Trade:
     exchange: str

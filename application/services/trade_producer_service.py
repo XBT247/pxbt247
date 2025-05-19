@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import List
 from application.workers.websocket_worker import WebSocketWorker
-from core.use_cases.produce_trades import ProduceTradesUseCase
+from core.use_cases.uc_produce_trades import ProduceTradesUseCase
 
 class TradeProducerService:
     def __init__(

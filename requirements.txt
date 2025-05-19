@@ -5,3 +5,4 @@ websockets
 aiomysql
 python-dotenv
 lz4
+numpy

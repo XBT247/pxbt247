@@ -1,9 +1,10 @@
 # infrastructure/config/settings.py
 import json
-
-import json
+import logging
 from pathlib import Path
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 class ConfigLoader:
     _configs: Dict[str, Any] = {}
@@ -21,9 +22,11 @@ class ConfigLoader:
                 with open(base_path / f"{exchange}.json") as f:
                     exchange_cfg = json.load(f)
             except FileNotFoundError:
+                logger.error(f"Configuration file for '{exchange}' not found.")
                 exchange_cfg = {}
                 
             cls._configs[exchange] = {**base, **exchange_cfg}
+            logger.debug(f"Loaded configuration for '{exchange}': {cls._configs[exchange]}")
             
         return cls._configs[exchange]
 

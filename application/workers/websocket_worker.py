@@ -33,7 +33,7 @@ class WebSocketWorker:
             # Validate symbols in the 'basequote' format (e.g., 'BTCUSDT')
             if isinstance(s, str) and len(s) > 3 and s.isalnum():
                 valid.append(s)
-            else:
+        else:
                 self.logger.info(f"Invalid symbol format: {s}")
         return valid
 

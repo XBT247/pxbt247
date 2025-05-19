@@ -1,6 +1,7 @@
 # infra/db/mysql/repositories/trade_repository.py
 import asyncio
 import json
+import time
 from typing import Dict, List, Any, Optional
 from collections import OrderedDict, defaultdict
 from core import logging
@@ -8,6 +9,7 @@ from core.domain.trade import RawTrade
 from infrastructure.db.BaseRepository import BaseRepository
 from infrastructure.db.DBError import RepositoryError
 from infrastructure.db.interfaces.itrade_repository import ITradesRepository
+from infrastructure.db.models.trade_db_model import TradeDBModel
 
 class TradesRepository(BaseRepository, ITradesRepository):
     """MySQL implementation of trade data repository"""
@@ -156,3 +158,92 @@ class TradesRepository(BaseRepository, ITradesRepository):
         except Exception as e:
             self.logger.error(f"Failed to add trade to {table_name}: {e}")
             raise
+
+    async def fetch_trades_history(self, symbol: str, lookback_days: int = 0, total_records: int = 0, order_asc: bool = True) -> List[TradeDBModel]:
+        """Fetch historical volume and trades data for a symbol and return as TradingPair objects"""
+        table_name = self._get_table_name(symbol)
+        conditions = []
+        params = []
+
+        # Add serverTime filter if lookback_days > 0
+        if lookback_days > 0:
+            millis_now = int(time.time() * 1000)
+            millis_delta = lookback_days * 24 * 60 * 60 * 1000
+            from_timestamp = millis_now - millis_delta
+            conditions.append("serverTime >= %s")
+            params.append(from_timestamp)
+
+        # Build base query
+        query = f"""
+            SELECT id, serverTime, open, close, avgPrice, high, low, high200, low200,
+                qusd_price, volume, trades, totalVolumeBuy, totalVolumeSell, 
+                actualVolSell, actualVolBuy, actualVolume, totalTradesBuy, 
+                totalTradesSell, buyPercentage, volumePoints, tradesPoints, 
+                sumVolumePoints100, sumTradePoints100, qtr_history30, qtr_history100, 
+                qtr_avgHistory100, order_side, order_type, order_price, 
+                order_text, isSidelined, dir
+            FROM {table_name}
+        """
+
+        # Add WHERE clause if needed
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        # Add ORDER BY clause
+        #query += " ORDER BY serverTime " + ("ASC" if order_asc else "DESC")
+
+        # Add LIMIT if requested
+        if total_records > 0:
+            query += " LIMIT %s"
+            params.append(total_records)
+
+        try:
+            rows = await self._execute(query, tuple(params))
+            self.logger.info(f"fetch_trades_history Fetched {len(rows)} rows from {table_name}")
+            trade_models = [
+                TradeDBModel(
+                    id=row['id'],
+                    server_time=row['serverTime'],
+                    open=row['open'],
+                    close=row['close'],
+                    avg_price=row['avgPrice'],
+                    high=row['high'],
+                    low=row['low'],
+                    high200=row['high200'],
+                    low200=row['low200'],
+                    qusd_price=row['qusd_price'],
+                    volume=row['volume'],
+                    trades=row['trades'],
+                    total_volume_buy=row['totalVolumeBuy'],
+                    total_volume_sell=row['totalVolumeSell'],
+                    actual_vol_sell=row['actualVolSell'],
+                    actual_vol_buy=row['actualVolBuy'],
+                    actual_volume=row['actualVolume'],
+                    total_trades_buy=row['totalTradesBuy'],
+                    total_trades_sell=row['totalTradesSell'],
+                    buy_percentage=row['buyPercentage'],
+                    volume_points=row['volumePoints'],
+                    trades_points=row['tradesPoints'],
+                    sum_volume_points_100=row['sumVolumePoints100'],
+                    sum_trade_points_100=row['sumTradePoints100'],
+                    qtr_history_30=row['qtr_history30'],
+                    qtr_history_100=row['qtr_history100'],
+                    qtr_avg_history_100=row['qtr_avgHistory100'],
+                    order_side=row['order_side'],
+                    order_type=row['order_type'],
+                    order_price=row['order_price'],
+                    order_text=row['order_text'],
+                    is_sidelined=row['isSidelined'],
+                    dir=row['dir']
+                )
+                for row in rows
+            ]
+
+            #if trade_models:
+            #    self.logger.info(f"Sample TradeDBModel: {trade_models[0]}")
+
+            return trade_models
+            
+        except Exception as e:
+            self._log_error(f"Failed to fetch volume/trades history for {symbol}", e)
+            raise RepositoryError(f"Failed to fetch volume/trades history for {symbol}", e)

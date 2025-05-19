@@ -1,4 +1,4 @@
-from core.use_cases.process_trades import ProcessTradeUseCase
+from core.use_cases.uc_process_trades import ProcessTradeUseCase
 from application.controllers.trade_controller import TradeMessageController
 from infrastructure.config.settings import load_config
 from infrastructure.messaging.kafka_consumer import KafkaConsumerClient

@@ -48,7 +48,7 @@ class BaseRepository:
 
     def _log_error(self, message: str, error: Exception):
         if self.logger:
-            self.logger.error(f"{message}. Error: {str(error)}")
+            self.logger.error(f"BaseRepo {message}. Error: {str(error)}")
 
     @asynccontextmanager
     async def transaction(self):

@@ -1,10 +1,8 @@
 import asyncio
-
-from maincontainers.container import Container
-#from composition_root.container import Container
+from maincontainers.producer_container import ProducerContainer
 
 async def main():
-    container = Container("binance")
+    container = ProducerContainer("binance")
     await container.initialize()
     
     try:

@@ -1,6 +1,6 @@
 # application/controllers/trade_controller.py
 from core.domain.trade import Trade
-from core.use_cases.process_trades import ProcessTradeUseCase
+from core.use_cases.uc_process_trades import ProcessTradeUseCase
 
 class TradeMessageController:
     def __init__(self, use_case: ProcessTradeUseCase):
