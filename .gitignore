@@ -1,7 +1,41 @@
-# Ignore all files larger than 10MB
+# Logs and debug files
 *.log
+debug.log
+
+# Temporary files
+*.tmp
+*.swp
+*.bak
+*.orig
+*.~*
+
+# Virtual environments
+venv/
+env/
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# Python build and distribution files
+build/
+dist/
+*.egg-info/
+
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Data files
 *.sql
 *.csv
 *.json
 *.txt
 *.xlsx
+
+# Environment and sensitive files
+.env
+.env.*
+
+# Node.js (if applicable)
+node_modules/

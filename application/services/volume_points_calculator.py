@@ -179,6 +179,8 @@ class VolumePointsCalculator:
         
         # Middle slots (2% to 90%)
         for i in range(len(base_edges) - 1):
+            if i == 0:
+                min_weight = 1
             weight = min_weight + (i * weight_step)
             percentile_min = min_percentile + (i * (max_percentile - min_percentile) / (slot_count - 1))
             percentile_max = percentile_min + (max_percentile - min_percentile) / (slot_count - 1)
